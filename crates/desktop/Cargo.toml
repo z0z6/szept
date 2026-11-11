@@ -18,7 +18,7 @@ tauri-build = { version = "2.7", features = [] }
 komunikator-ffi = { path = "../ffi" }
 serde = { workspace = true }
 tauri = { version = "2.12", features = [] }
-tauri-plugin-notification = "~2.7.0"
+tauri-plugin-notification = "~2.8.0"
 
 # Lets the scanner use the camera inside WebKitGTK.
 [target.'cfg(target_os = "linux")'.dependencies]
