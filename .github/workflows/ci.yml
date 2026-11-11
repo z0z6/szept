@@ -49,9 +49,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x86_64, os: ubuntu-latest, exe: komunikator }
-          - { name: windows-x86_64, os: windows-latest, exe: komunikator.exe }
-          - { name: macos-arm64, os: macos-latest, exe: komunikator }
+          - { name: linux-x86_64, os: ubuntu-latest, exe: szept }
+          - { name: windows-x86_64, os: windows-latest, exe: szept.exe }
+          - { name: macos-arm64, os: macos-latest, exe: szept }
     defaults:
       run:
         shell: bash
@@ -76,10 +76,10 @@ jobs:
       - name: Paczka
         run: |
           mkdir dist
-          cp "target/release/${{ matrix.exe }}" "dist/komunikator-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
+          cp "target/release/${{ matrix.exe }}" "dist/szept-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: komunikator-${{ matrix.name }}
+          name: szept-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
@@ -112,10 +112,10 @@ jobs:
           export JAVA_HOME="${JAVA_HOME_17_X64:-${JAVA_HOME_21_X64:-$JAVA_HOME}}"
           bash scripts/build-android.sh
           mkdir dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/komunikator-android-debug.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/szept-android-debug.apk
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: komunikator-android
+          name: szept-android
           path: dist/*
           if-no-files-found: error
 
@@ -133,7 +133,7 @@ jobs:
           merge-multiple: true
       - name: Sumy kontrolne
         working-directory: dist
-        run: sha256sum komunikator-* > SHA256SUMS
+        run: sha256sum szept-* > SHA256SUMS
       - name: Publikacja
         env:
           GH_TOKEN: ${{ github.token }}
