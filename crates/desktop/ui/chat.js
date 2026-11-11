@@ -21,6 +21,124 @@ const STATUS = {
   },
 };
 
+const KIND_ICON = {
+  program: "📦",
+  archive: "🗜️",
+  image: "🖼️",
+  audio: "🎵",
+  video: "🎬",
+  document: "📄",
+  other: "📎",
+};
+
+const sizeFormat = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 });
+
+function formatSize(bytes) {
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit += 1;
+  }
+  return `${sizeFormat.format(value)} ${units[unit]}`;
+}
+
+// First 16 hex digits of the hash, in groups: enough to compare by voice.
+function fingerprint(hash) {
+  return hash.slice(0, 16).match(/.{4}/g).join(" ");
+}
+
+// Players and pictures survive redraws, so music keeps playing while other
+// messages arrive.
+const mediaCache = new Map();
+
+function media(message, tag) {
+  const key = `${message.id}:${message.file.path}`;
+  let node = mediaCache.get(key);
+  if (!node) {
+    const src = tauri.core.convertFileSrc(message.file.path);
+    if (tag === "img") {
+      node = el("img", { class: "file-preview", src, alt: message.file.name, loading: "lazy" });
+      node.addEventListener("click", () => act("open_file", message.id));
+    } else {
+      node = el(tag, { src, controls: true, preload: "metadata" });
+    }
+    mediaCache.set(key, node);
+  }
+  return node;
+}
+
+async function act(command, id) {
+  try {
+    await invoke(command, { peer, id });
+    showProblem("");
+  } catch (err) {
+    showProblem(friendly(err));
+  }
+}
+
+function fileCard(message, alias) {
+  const file = message.file;
+  const card = el("div", { class: "file" });
+  card.append(el("span", { class: "file-icon", "aria-hidden": "true", text: KIND_ICON[file.kind] || "📎" }));
+  card.append(el("span", { class: "file-name", text: file.name }));
+
+  let meta = formatSize(file.size);
+  if (file.transfer === "downloading") meta = `${formatSize(file.done)} z ${formatSize(file.size)}`;
+  if (file.transfer === "saved") meta += ", zapisany";
+  if (file.transfer === "shared") meta += ", udostępniony z tego urządzenia";
+  card.append(el("span", { class: "file-meta", text: meta }));
+
+  if (file.kind === "program" && !message.mine) {
+    card.append(
+      el(
+        "p",
+        { class: "file-warning" },
+        `Program od: ${alias}. Uruchamiaj go tylko, jeśli wiesz, co to jest. Odcisk: `,
+        el("span", { class: "fingerprint", text: fingerprint(file.hash) }),
+      ),
+    );
+  }
+
+  if (file.transfer === "downloading") {
+    card.append(el("progress", { max: String(file.size || 1), value: String(file.done) }));
+  }
+  if (file.transfer === "failed" && file.reason) {
+    card.append(el("p", { class: "file-error", text: `Pobieranie przerwane: ${friendly(file.reason)}` }));
+  }
+
+  const local = file.path && (file.transfer === "saved" || file.transfer === "shared");
+  if (local && file.kind === "image") card.append(media(message, "img"));
+  if (local && file.kind === "audio") card.append(media(message, "audio"));
+  if (local && file.kind === "video") card.append(media(message, "video"));
+
+  const actions = el("div", { class: "file-actions" });
+  if (file.transfer === "offered" || file.transfer === "failed") {
+    actions.append(
+      el("button", {
+        class: "button primary",
+        type: "button",
+        text: file.transfer === "failed" ? "Wznów pobieranie" : "Pobierz",
+        onclick: () => act("download", message.id),
+      }),
+    );
+  }
+  if (local) {
+    if (file.kind !== "program") {
+      actions.append(el("button", { class: "button", type: "button", text: "Otwórz", onclick: () => act("open_file", message.id) }));
+    }
+    actions.append(el("button", { class: "button", type: "button", text: "Pokaż w folderze", onclick: () => act("reveal", message.id) }));
+  }
+  if (actions.childElementCount) card.append(actions);
+  return card;
+}
+
+function showProblem(text) {
+  $("problem").textContent = text;
+  $("problem").hidden = !text;
+}
+
 const timeFormat = new Intl.DateTimeFormat("pl-PL", { hour: "2-digit", minute: "2-digit" });
 const dayFormat = new Intl.DateTimeFormat("pl-PL", { weekday: "long", day: "numeric", month: "long" });
 
@@ -41,10 +159,10 @@ async function refresh() {
   $("presence").textContent = data.online
     ? "Połączony"
     : "Niepołączony. Wiadomości wyjdą, gdy kontakt się pojawi.";
-  renderMessages(data.messages);
+  renderMessages(data.messages, data.alias);
 }
 
-function renderMessages(messages) {
+function renderMessages(messages, alias) {
   const box = $("messages");
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   const nodes = [];
@@ -62,7 +180,7 @@ function renderMessages(messages) {
     const fresh = !firstRender && !shown.has(message.id);
     shown.add(message.id);
     const classes = ["bubble", message.mine ? "mine" : "theirs"];
-    if (onlyEmoji(message.body)) classes.push("big-emoji");
+    if (!message.file && onlyEmoji(message.body)) classes.push("big-emoji");
     if (fresh) classes.push("fresh");
 
     const meta = el("span", { class: "meta" }, el("span", { text: timeFormat.format(when) }));
@@ -79,11 +197,12 @@ function renderMessages(messages) {
       tick.innerHTML = status.svg;
       meta.append(tick);
     }
-    nodes.push(el("div", { class: classes.join(" ") }, el("div", { class: "body", text: message.body }), meta));
+    const content = message.file ? fileCard(message, alias) : el("div", { class: "body", text: message.body });
+    nodes.push(el("div", { class: classes.join(" ") }, content, meta));
   });
 
   if (messages.length === 0) {
-    nodes.push(el("p", { class: "empty", text: "Napisz pierwszą wiadomość. Rozmowa trwa, dopóki Szept jest otwarty." }));
+    nodes.push(el("p", { class: "empty", text: "Napisz pierwszą wiadomość albo przeciągnij tu pliki. Rozmowa trwa, dopóki Szept jest otwarty." }));
   }
   box.replaceChildren(...nodes);
   if (firstRender || nearBottom) box.scrollTop = box.scrollHeight;
@@ -96,7 +215,7 @@ listen("changed", (event) => {
   if (change.peer && change.peer !== peer) return;
   if (document.hasFocus()) {
     if (change.kind === "incoming") sounds.incoming();
-    if (change.kind === "sent") sounds.sent();
+    if (change.kind === "sent" || change.kind === "saved") sounds.sent();
   }
   if (pending) return;
   pending = true;
@@ -104,6 +223,15 @@ listen("changed", (event) => {
     pending = false;
     refresh();
   });
+});
+
+listen("problem", (event) => {
+  if (event.payload?.peer === peer) showProblem(event.payload.text);
+});
+
+$("attach").addEventListener("click", () => {
+  showProblem("");
+  invoke("send_files", { peer }).catch((err) => showProblem(friendly(err)));
 });
 
 // Writing

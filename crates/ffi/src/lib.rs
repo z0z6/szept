@@ -7,16 +7,18 @@
 mod engine;
 
 use std::{
+    collections::{HashMap, HashSet},
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, anyhow, bail};
 use komunikator_core::{
-    Contacts, EndpointAddr, EndpointId, Event, Identity, Network, Node, Outgoing, contacts,
-    identity,
+    Contacts, EndpointAddr, EndpointId, Event, FileOffer, Identity, MessageId, Network, Node,
+    Outgoing, contacts, files, identity,
 };
 use tokio::{runtime::Runtime, sync::mpsc, task::JoinHandle};
 
@@ -73,6 +75,44 @@ pub enum ChatEvent {
         peer: String,
         id: String,
     },
+    /// The contact offers a file. Fetch it with [`App::download`].
+    /// `hash` is the BLAKE3 hash in hex, for comparing by eye.
+    FileOffered {
+        peer: String,
+        id: String,
+        sent_at_ms: u64,
+        name: String,
+        size: u64,
+        hash: String,
+    },
+    /// A download moved forward: `done` of `total` bytes.
+    FileProgress {
+        peer: String,
+        id: String,
+        done: u64,
+        total: u64,
+    },
+    /// A download finished, was verified and saved at `path`.
+    FileSaved {
+        peer: String,
+        id: String,
+        path: String,
+    },
+    /// A download stopped. Calling [`App::download`] again resumes it.
+    FileFailed {
+        peer: String,
+        id: String,
+        reason: String,
+    },
+}
+
+/// A file just offered to a contact.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SentFile {
+    pub id: String,
+    pub name: String,
+    pub size: u64,
+    pub hash: String,
 }
 
 impl From<Event> for ChatEvent {
@@ -98,6 +138,19 @@ impl From<Event> for ChatEvent {
             Event::Delivered { peer, id } => Self::Delivered {
                 peer: peer.to_string(),
                 id: id.to_string(),
+            },
+            Event::FileOffered {
+                peer,
+                id,
+                sent_at_ms,
+                offer,
+            } => Self::FileOffered {
+                peer: peer.to_string(),
+                id: id.to_string(),
+                sent_at_ms,
+                hash: files::hash_hex(&offer.hash),
+                name: offer.name,
+                size: offer.size,
             },
         }
     }
@@ -144,6 +197,14 @@ pub fn normalize_id(text: String) -> Result<String> {
     Ok(parse_id(&text)?.to_string())
 }
 
+/// What kind of file a name suggests: "program", "archive", "image",
+/// "audio", "video", "document" or "other". Programs are never opened by
+/// the app itself, only shown in their folder.
+#[uniffi::export]
+pub fn file_kind(name: String) -> String {
+    files::kind(&name).to_owned()
+}
+
 /// Receives events. Called on a background thread.
 #[uniffi::export(with_foreign)]
 pub trait EventListener: Send + Sync {
@@ -158,12 +219,19 @@ pub struct App {
     contacts: Mutex<Contacts>,
     network: Network,
     running: Mutex<Option<Running>>,
+    /// Files contacts offered us, by message id.
+    offers: Offers,
+    /// Message ids of the downloads in progress.
+    downloading: Arc<Mutex<HashSet<String>>>,
 }
+
+pub(crate) type Offers = Arc<Mutex<HashMap<String, (EndpointId, MessageId, FileOffer)>>>;
 
 struct Running {
     node: Node,
     commands: mpsc::UnboundedSender<Command>,
     engine: JoinHandle<()>,
+    listener: Arc<dyn EventListener>,
 }
 
 #[uniffi::export]
@@ -198,6 +266,8 @@ impl App {
                 Network::Public
             },
             running: Mutex::new(None),
+            offers: Offers::default(),
+            downloading: Arc::default(),
         }))
     }
 
@@ -269,7 +339,8 @@ impl App {
             node.clone(),
             events,
             commands_rx,
-            listener,
+            listener.clone(),
+            self.offers.clone(),
             known,
             // Without a lookup service there is nobody to ask for addresses.
             self.network == Network::Public,
@@ -278,6 +349,7 @@ impl App {
             node,
             commands,
             engine,
+            listener,
         });
         Ok(())
     }
@@ -300,6 +372,104 @@ impl App {
         let id = message.id.to_string();
         self.command(Command::Send { peer, message })?;
         Ok(id)
+    }
+
+    /// Offers the file at `path` to a contact and returns what was offered.
+    ///
+    /// The file stays where it is: the contact fetches it straight from this
+    /// device, so it must not move or change until then, and this device must
+    /// be online. Reads the whole file to hash it: call off the main thread,
+    /// and not from inside an async runtime.
+    pub fn send_file(&self, peer: String, path: String) -> Result<SentFile> {
+        let peer = parse_id(&peer)?;
+        let node = self.node()?;
+        let message = self.runtime.block_on(node.share(peer, Path::new(&path)))?;
+        let sent = match &message.content {
+            komunikator_core::Content::File(offer) => SentFile {
+                id: message.id.to_string(),
+                name: offer.name.clone(),
+                size: offer.size,
+                hash: files::hash_hex(&offer.hash),
+            },
+            komunikator_core::Content::Text(_) => unreachable!("share makes a file offer"),
+        };
+        self.command(Command::Send { peer, message })?;
+        Ok(sent)
+    }
+
+    /// Downloads the file offered as `id` into the directory `dir`, in the
+    /// background. Progress arrives as [`ChatEvent::FileProgress`], the end as
+    /// [`ChatEvent::FileSaved`] or [`ChatEvent::FileFailed`]. Calling it again
+    /// after a failure resumes where the transfer stopped.
+    pub fn download(&self, id: String, dir: String) -> Result<()> {
+        let (peer, message_id, offer) = self
+            .offers
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .context("this file offer is no longer known")?;
+        if !self.downloading.lock().unwrap().insert(id.clone()) {
+            return Ok(());
+        }
+        let (node, listener) = {
+            let running = self.running.lock().unwrap();
+            let Some(running) = &*running else {
+                self.downloading.lock().unwrap().remove(&id);
+                return Err(anyhow!("the app is offline").into());
+            };
+            (running.node.clone(), running.listener.clone())
+        };
+        let downloading = self.downloading.clone();
+        self.runtime.spawn(async move {
+            let peer_text = peer.to_string();
+            let total = offer.size;
+            let mut last = (Instant::now(), 0u64);
+            let progress = |done: u64| {
+                // At most about five reports a second, plus the last one.
+                let due = last.0.elapsed() >= Duration::from_millis(200) || done == total;
+                if due && (done != last.1 || done == 0) {
+                    last = (Instant::now(), done);
+                    listener.on_event(ChatEvent::FileProgress {
+                        peer: peer_text.clone(),
+                        id: id.clone(),
+                        done,
+                        total,
+                    });
+                }
+            };
+            let result = node
+                .download(peer, message_id, &offer, Path::new(&dir), progress)
+                .await;
+            downloading.lock().unwrap().remove(&id);
+            listener.on_event(match result {
+                Ok(path) => ChatEvent::FileSaved {
+                    peer: peer.to_string(),
+                    id,
+                    path: path.to_string_lossy().into_owned(),
+                },
+                Err(err) => ChatEvent::FileFailed {
+                    peer: peer.to_string(),
+                    id,
+                    reason: format!("{err:#}"),
+                },
+            });
+        });
+        Ok(())
+    }
+
+    /// Stops offering a file sent earlier.
+    pub fn unshare(&self, id: String) -> Result<()> {
+        let id: MessageId = id.parse()?;
+        self.node()?.unshare(&id);
+        Ok(())
+    }
+
+    /// Call when the device switches networks (Wi-Fi, mobile data, none):
+    /// the app then finds its new addresses and reconnects at once instead
+    /// of at the next periodic retry. Harmless when nothing changed.
+    pub fn network_changed(&self) {
+        let _ = self.command(Command::NetworkChanged);
     }
 
     /// Returns `true` if a connection with the contact is up.
@@ -337,6 +507,14 @@ impl App {
 }
 
 impl App {
+    fn node(&self) -> Result<Node> {
+        let running = self.running.lock().unwrap();
+        running
+            .as_ref()
+            .map(|running| running.node.clone())
+            .ok_or_else(|| anyhow!("the app is offline").into())
+    }
+
     fn command(&self, command: Command) -> Result<()> {
         let running = self.running.lock().unwrap();
         let Some(running) = &*running else {

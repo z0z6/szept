@@ -17,16 +17,21 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-use crate::{ChatEvent, EventListener};
+use crate::{ChatEvent, EventListener, Offers};
 
 /// How often offline contacts are dialled again.
 const RETRY_EVERY: Duration = Duration::from_secs(10);
 
 pub(crate) enum Command {
-    Send { peer: EndpointId, message: Outgoing },
+    Send {
+        peer: EndpointId,
+        message: Outgoing,
+    },
     ContactAdded(EndpointId),
     ContactRemoved(EndpointId),
     Dial(EndpointAddr),
+    /// The device switched networks: look around and redial everyone now.
+    NetworkChanged,
 }
 
 pub(crate) async fn run(
@@ -34,6 +39,7 @@ pub(crate) async fn run(
     mut events: Receiver<Event>,
     mut commands: UnboundedReceiver<Command>,
     listener: Arc<dyn EventListener>,
+    offers: Offers,
     contacts: Vec<EndpointId>,
     dial_by_id: bool,
 ) {
@@ -62,12 +68,31 @@ pub(crate) async fn run(
                         outbox.remove(&peer);
                     }
                     Command::Dial(addr) => dial(&node, addr, &mut dialling),
+                    Command::NetworkChanged => {
+                        node.network_changed().await;
+                        // Old attempts may be stuck on the network that is gone.
+                        for (_, attempt) in dialling.drain() {
+                            attempt.abort();
+                        }
+                        if dial_by_id {
+                            for peer in &contacts {
+                                dial(&node, EndpointAddr::from(*peer), &mut dialling);
+                            }
+                        }
+                    }
                 }
             }
             event = events.recv() => {
                 let Some(event) = event else { break };
                 let connected = match &event {
                     Event::Connected { peer } => Some(*peer),
+                    Event::FileOffered { peer, id, offer, .. } => {
+                        offers
+                            .lock()
+                            .unwrap()
+                            .insert(id.to_string(), (*peer, *id, offer.clone()));
+                        None
+                    }
                     _ => None,
                 };
                 // Report the connection before the queued messages go out,

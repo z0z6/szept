@@ -12,8 +12,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use komunikator_core::{
-    Contacts, EndpointAddr, EndpointId, Event, Identity, Network, Node, Outgoing, contacts,
-    identity,
+    Contacts, EndpointAddr, EndpointId, Event, FileOffer, Identity, MessageId, Network, Node,
+    Outgoing, contacts, identity,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -171,9 +171,12 @@ async fn chat(
         None => println!("Czekam, aż `{alias}` połączy się ze mną…"),
     }
     println!("Pisz i zatwierdzaj Enterem. Wyjście: /quit lub Ctrl+C.");
+    println!("Plik: /plik <ścieżka>. Pobranie oferty: /pobierz <numer>.");
 
     let mut lines = spawn_stdin_reader();
     let mut pending: VecDeque<Outgoing> = VecDeque::new();
+    // Files offered to us in this session, numbered from 1 for /pobierz.
+    let mut offers: Vec<(EndpointId, MessageId, FileOffer)> = Vec::new();
     let mut dialling: Option<JoinHandle<()>> = None;
     let mut retry = tokio::time::interval(RETRY_EVERY);
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -189,7 +192,34 @@ async fn chat(
                 if line.is_empty() {
                     continue;
                 }
-                match Outgoing::new(line) {
+                if let Some(number) = line.strip_prefix("/pobierz") {
+                    let chosen = number
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|n| n.checked_sub(1))
+                        .and_then(|n| offers.get(n).cloned());
+                    let Some((from, id, offer)) = chosen else {
+                        println!("  ! podaj numer oferty, np. /pobierz 1");
+                        continue;
+                    };
+                    let dir = std::env::current_dir()?;
+                    let node = node.clone();
+                    println!("  ↓ pobieram {} do {}", offer.name, dir.display());
+                    tokio::spawn(async move {
+                        match node.download(from, id, &offer, &dir, |_| {}).await {
+                            Ok(path) => println!("  ✓ zapisano {}", path.display()),
+                            Err(err) => println!("  ! nie udało się pobrać {}: {err:#}", offer.name),
+                        }
+                    });
+                    continue;
+                }
+                let message = if let Some(path) = line.strip_prefix("/plik ") {
+                    node.share(peer, std::path::Path::new(path.trim())).await
+                } else {
+                    Outgoing::new(line)
+                };
+                match message {
                     Ok(message) => pending.push_back(message),
                     Err(err) => {
                         println!("  ! {err}");
@@ -218,6 +248,16 @@ async fn chat(
                         println!("[{}] {}", name(contacts, &who), printable(&body));
                     }
                     Event::Delivered { .. } => println!("  ✓ dostarczono"),
+                    Event::FileOffered { peer: who, id, offer, .. } => {
+                        offers.push((who, id, offer.clone()));
+                        println!(
+                            "[{}] plik {} ({} B), pobierz: /pobierz {}",
+                            name(contacts, &who),
+                            printable(&offer.name),
+                            offer.size,
+                            offers.len()
+                        );
+                    }
                 }
             }
             _ = retry.tick() => {

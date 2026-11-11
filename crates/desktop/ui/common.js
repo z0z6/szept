@@ -90,6 +90,10 @@ const ERRORS = [
   [/not a valid identifier|identifier is empty/, "To nie jest identyfikator Szeptu."],
   [/message is too long/, "Wiadomość jest za długa."],
   [/app is offline|shutting down/, "Szept nie jest połączony z siecią."],
+  [/no longer shares this file|offer is no longer known/, "Nadawca już nie udostępnia tego pliku."],
+  [/changed or disappeared/, "Plik zmienił się albo zniknął u nadawcy."],
+  [/arrived damaged/, "Plik dotarł uszkodzony i został usunięty. Spróbuj ponownie."],
+  [/did not answer in time|cannot connect|connection lost|stalled|cut short/, "Nadawca jest niedostępny. Pobieranie wznowi się od miejsca przerwania."],
 ];
 
 function friendly(err) {

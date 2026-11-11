@@ -8,23 +8,34 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    io::SeekFrom,
     net::SocketAddr,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use iroh::{
     Endpoint, EndpointAddr, EndpointId, RelayMode,
-    endpoint::{Connection, presets},
+    endpoint::{Connection, RecvStream, SendStream, presets},
     protocol::{AcceptError, ProtocolHandler, Router},
 };
-use tokio::{sync::mpsc, time::timeout};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    sync::mpsc,
+    time::timeout,
+};
 use tracing::debug;
 
 use crate::{
+    files,
     identity::Identity,
-    protocol::{ALPN, Frame, MAX_FRAME_LEN, MessageId, Outgoing},
+    protocol::{
+        ALPN, FETCH_GONE, FETCH_OK, FETCH_UNKNOWN, FetchRequest, FileOffer, Frame, MAX_FRAME_LEN,
+        MessageId, Outgoing,
+    },
 };
 
 /// How long a dial may take before the contact counts as offline.
@@ -41,6 +52,12 @@ const CLOSE_CONTACT_REMOVED: u32 = 2;
 
 /// Number of events buffered for the user interface.
 const EVENT_BUFFER: usize = 256;
+
+/// How long the sending side may stay silent during a file transfer.
+const TRANSFER_STALL: Duration = Duration::from_secs(60);
+
+/// Size of one read or write during a file transfer.
+const CHUNK: usize = 256 * 1024;
 
 /// Which outside services the node may use to find and reach contacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +87,21 @@ pub enum Event {
     },
     /// A contact's device confirmed that it received our message.
     Delivered { peer: EndpointId, id: MessageId },
+    /// A contact offers a file. Fetch it with [`Node::download`].
+    FileOffered {
+        peer: EndpointId,
+        id: MessageId,
+        sent_at_ms: u64,
+        offer: FileOffer,
+    },
+}
+
+/// A file this device offered to a contact.
+#[derive(Debug, Clone)]
+struct Share {
+    peer: EndpointId,
+    path: PathBuf,
+    offer: FileOffer,
 }
 
 /// A running node. Cloning is cheap and gives another handle to the same node.
@@ -84,6 +116,8 @@ struct Inner {
     allowed: RwLock<HashSet<EndpointId>>,
     /// The connection used for sending to each contact.
     connections: Mutex<HashMap<EndpointId, Connection>>,
+    /// Files offered to contacts, by the id of the offering message.
+    shares: Mutex<HashMap<MessageId, Share>>,
     events: mpsc::Sender<Event>,
 }
 
@@ -104,6 +138,7 @@ impl Node {
             }
         };
         let endpoint = builder
+            .crypto_provider(crate::crypto::provider())
             .secret_key(identity.secret_key())
             .bind()
             .await
@@ -114,6 +149,7 @@ impl Node {
             endpoint: endpoint.clone(),
             allowed: RwLock::new(contacts.into_iter().collect()),
             connections: Mutex::default(),
+            shares: Mutex::default(),
             events,
         });
         let router = Router::builder(endpoint)
@@ -142,6 +178,12 @@ impl Node {
     /// `limit`. Returns `false` if the limit passed first.
     pub async fn wait_online(&self, limit: Duration) -> bool {
         timeout(limit, self.inner.endpoint.online()).await.is_ok()
+    }
+
+    /// Tells the node the device switched networks, for example from Wi-Fi
+    /// to mobile data, so it finds its new addresses right away.
+    pub async fn network_changed(&self) {
+        self.inner.endpoint.network_change().await;
     }
 
     /// Lets `peer` connect to this node from now on.
@@ -186,6 +228,135 @@ impl Node {
         write_frame(&conn, &message.to_frame()).await
     }
 
+    /// Makes the file at `path` available to `peer` and returns the message
+    /// that offers it. Send that message like any other.
+    ///
+    /// The file is read once here to compute its hash, and again whenever the
+    /// contact fetches it. Until then it must stay where it is, unchanged.
+    pub async fn share(&self, peer: EndpointId, path: &Path) -> Result<Outgoing> {
+        let path = path.to_owned();
+        let offer = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || files::describe(&path)
+        })
+        .await??;
+        let message = Outgoing::file(offer.clone());
+        self.inner
+            .shares
+            .lock()
+            .unwrap()
+            .insert(message.id, Share { peer, path, offer });
+        Ok(message)
+    }
+
+    /// Stops offering the file sent as `id`.
+    pub fn unshare(&self, id: &MessageId) {
+        self.inner.shares.lock().unwrap().remove(id);
+    }
+
+    /// Fetches the file `peer` offered as `id` into `dir` and returns where it
+    /// landed. Never overwrites an existing file.
+    ///
+    /// An interrupted download resumes from where it stopped the next time it
+    /// is called. Nothing is kept unless the content matches the offered
+    /// hash. `progress` gets the number of bytes received so far.
+    pub async fn download(
+        &self,
+        peer: EndpointId,
+        id: MessageId,
+        offer: &FileOffer,
+        dir: &Path,
+        mut progress: impl FnMut(u64) + Send,
+    ) -> Result<PathBuf> {
+        ensure!(files::is_safe_name(&offer.name), "unsafe file name");
+        fs::create_dir_all(dir)
+            .await
+            .with_context(|| format!("cannot create {}", dir.display()))?;
+        let part = dir.join(format!(".{id}.szept-part"));
+
+        // Resume: hash what is already there, then ask for the rest.
+        let mut hasher = blake3::Hasher::new();
+        let mut have = match fs::metadata(&part).await {
+            Ok(metadata) if metadata.len() <= offer.size => metadata.len(),
+            _ => 0,
+        };
+        if have > 0 {
+            let part = part.clone();
+            let (resumed, state) = tokio::task::spawn_blocking(move || {
+                let mut file = std::fs::File::open(&part)?;
+                let mut hasher = blake3::Hasher::new();
+                let read = files::copy_into_hasher(&mut file, &mut hasher)?;
+                Ok::<_, std::io::Error>((read, hasher))
+            })
+            .await??;
+            have = resumed;
+            hasher = state;
+        }
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(have == 0)
+            .open(&part)
+            .await
+            .with_context(|| format!("cannot write {}", part.display()))?;
+        file.seek(SeekFrom::Start(have)).await?;
+        progress(have);
+
+        if have < offer.size {
+            let conn = match self.inner.live_connection(&peer) {
+                Some(conn) => conn,
+                None => self.dial(peer.into()).await?,
+            };
+            let (mut send, mut recv) = conn.open_bi().await.context("connection lost")?;
+            let request = postcard::to_stdvec(&FetchRequest { id, offset: have })?;
+            send.write_all(&request).await.context("connection lost")?;
+            send.finish().context("connection lost")?;
+
+            let mut status = [0u8; 1];
+            timeout(TRANSFER_STALL, recv.read_exact(&mut status))
+                .await
+                .context("the contact did not answer in time")?
+                .context("the contact closed the transfer")?;
+            match status[0] {
+                FETCH_OK => {}
+                FETCH_UNKNOWN => bail!("the contact no longer shares this file"),
+                FETCH_GONE => bail!("the file changed or disappeared on the contact's device"),
+                other => bail!("unexpected answer {other}"),
+            }
+
+            let mut buffer = vec![0u8; CHUNK];
+            loop {
+                let read = timeout(TRANSFER_STALL, recv.read(&mut buffer))
+                    .await
+                    .context("the transfer stalled")?
+                    .context("connection lost during the transfer")?;
+                let Some(read) = read else { break };
+                ensure!(
+                    have + read as u64 <= offer.size,
+                    "the contact sent more than announced"
+                );
+                file.write_all(&buffer[..read]).await?;
+                hasher.update(&buffer[..read]);
+                have += read as u64;
+                progress(have);
+            }
+        }
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+
+        ensure!(have == offer.size, "the transfer was cut short");
+        if *hasher.finalize().as_bytes() != offer.hash {
+            let _ = fs::remove_file(&part).await;
+            bail!("the file arrived damaged and was deleted");
+        }
+        let target = files::free_path(dir, &offer.name);
+        fs::rename(&part, &target)
+            .await
+            .with_context(|| format!("cannot save {}", target.display()))?;
+        Ok(target)
+    }
+
     /// Closes all connections and stops the node.
     pub async fn shutdown(self) {
         if let Err(err) = self.router.shutdown().await {
@@ -201,6 +372,7 @@ impl Node {
             .context("the contact did not answer in time")?
             .context("cannot connect to the contact")?;
         self.inner.register(&conn).await;
+        tokio::spawn(self.inner.clone().serve_files(conn.clone()));
         tokio::spawn({
             let inner = self.inner.clone();
             let conn = conn.clone();
@@ -297,7 +469,85 @@ impl Inner {
                 }
             }
             Frame::Ack { id } => self.emit(Event::Delivered { peer, id }).await,
+            Frame::File {
+                id,
+                sent_at_ms,
+                offer,
+            } => {
+                self.emit(Event::FileOffered {
+                    peer,
+                    id,
+                    sent_at_ms,
+                    offer,
+                })
+                .await;
+                if let Err(err) = write_frame(conn, &Frame::Ack { id }).await {
+                    debug!(%peer, "cannot confirm offer {id}: {err}");
+                }
+            }
         }
+    }
+
+    /// Answers the file requests a contact sends on `conn`.
+    async fn serve_files(self: Arc<Self>, conn: Connection) {
+        let peer = conn.remote_id();
+        while let Ok((send, recv)) = conn.accept_bi().await {
+            let inner = self.clone();
+            tokio::spawn(async move {
+                if let Err(err) = inner.serve_one(peer, send, recv).await {
+                    debug!(%peer, "file transfer ended: {err:#}");
+                }
+            });
+        }
+    }
+
+    async fn serve_one(
+        &self,
+        peer: EndpointId,
+        mut send: SendStream,
+        mut recv: RecvStream,
+    ) -> Result<()> {
+        let bytes = timeout(FRAME_TIMEOUT, recv.read_to_end(64))
+            .await
+            .map_err(|_| anyhow!("request timed out"))??;
+        let request: FetchRequest = postcard::from_bytes(&bytes)?;
+        // Only the contact the file was offered to may fetch it.
+        let share = self
+            .shares
+            .lock()
+            .unwrap()
+            .get(&request.id)
+            .filter(|share| share.peer == peer)
+            .cloned();
+        let Some(share) = share else {
+            send.write_all(&[FETCH_UNKNOWN]).await?;
+            send.finish()?;
+            return Ok(());
+        };
+        let opened = fs::File::open(&share.path).await;
+        let mut file = match opened {
+            Ok(file) if file.metadata().await?.len() == share.offer.size => file,
+            _ => {
+                send.write_all(&[FETCH_GONE]).await?;
+                send.finish()?;
+                return Ok(());
+            }
+        };
+        ensure!(request.offset <= share.offer.size, "offset past the end");
+        file.seek(SeekFrom::Start(request.offset)).await?;
+        send.write_all(&[FETCH_OK]).await?;
+        let mut buffer = vec![0u8; CHUNK];
+        loop {
+            let read = file.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            send.write_all(&buffer[..read]).await?;
+        }
+        send.finish()?;
+        // Wait until the contact has everything, or gives up.
+        let _ = send.stopped().await;
+        Ok(())
     }
 
     async fn emit(&self, event: Event) {
@@ -333,6 +583,7 @@ impl ProtocolHandler for ChatProtocol {
             return Ok(());
         }
         self.0.register(&conn).await;
+        tokio::spawn(self.0.clone().serve_files(conn.clone()));
         self.0.read_frames(conn).await;
         Ok(())
     }

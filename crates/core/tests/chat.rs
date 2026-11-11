@@ -134,3 +134,119 @@ async fn dialling_a_non_contact_is_refused_locally() {
     assert!(ala.connect(ola_identity.id()).await.is_err());
     ala.shutdown().await;
 }
+
+#[tokio::test]
+async fn files_travel_directly_and_are_verified() {
+    use komunikator_core::{Content, MessageId};
+
+    let (ala_identity, ola_identity) = (new_identity(), new_identity());
+    let (ala_id, ola_id) = (ala_identity.id(), ola_identity.id());
+    let (ala, mut ala_events) = Node::spawn(&ala_identity, [ola_id], Network::LocalOnly)
+        .await
+        .unwrap();
+    let (ola, mut ola_events) = Node::spawn(&ola_identity, [ala_id], Network::LocalOnly)
+        .await
+        .unwrap();
+    ala.connect(loopback(&ola)).await.unwrap();
+    next(&mut ala_events).await;
+    next(&mut ola_events).await;
+
+    // Three and a bit megabytes of noise, named like an installer.
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("instalator.exe");
+    let content: Vec<u8> = (0..3_300_000u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    std::fs::write(&source, &content).unwrap();
+
+    let message = ala.share(ola_id, &source).await.unwrap();
+    let Content::File(sent_offer) = &message.content else {
+        panic!("not a file offer")
+    };
+    assert_eq!(sent_offer.name, "instalator.exe");
+    assert_eq!(sent_offer.size, content.len() as u64);
+    ala.send(ola_id, &message).await.unwrap();
+
+    let (id, offer) = match next(&mut ola_events).await {
+        Event::FileOffered {
+            peer, id, offer, ..
+        } => {
+            assert_eq!(peer, ala_id);
+            (id, offer)
+        }
+        other => panic!("unexpected event: {other:?}"),
+    };
+    assert_eq!(id, message.id);
+    assert!(matches!(next(&mut ala_events).await, Event::Delivered { id: got, .. } if got == id));
+
+    // Pretend an earlier attempt stopped after the first 1000 bytes.
+    let downloads = temp_dir();
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(
+        downloads.join(format!(".{id}.szept-part")),
+        &content[..1000],
+    )
+    .unwrap();
+    let mut first_progress = None;
+    let saved = ola
+        .download(ala_id, id, &offer, &downloads, |done| {
+            first_progress.get_or_insert(done);
+        })
+        .await
+        .unwrap();
+    assert_eq!(first_progress, Some(1000), "the download did not resume");
+    assert_eq!(saved, downloads.join("instalator.exe"));
+    assert_eq!(std::fs::read(&saved).unwrap(), content);
+
+    // A second copy gets a new name instead of overwriting the first.
+    let again = ola
+        .download(ala_id, id, &offer, &downloads, |_| {})
+        .await
+        .unwrap();
+    assert_eq!(again, downloads.join("instalator (1).exe"));
+
+    // An offer under a made-up id is refused.
+    let unknown: MessageId = "00112233445566778899aabbccddeeff".parse().unwrap();
+    let err = ola
+        .download(ala_id, unknown, &offer, &downloads, |_| {})
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no longer shares"), "{err:#}");
+
+    // Changing the file after offering it makes the transfer fail safely.
+    std::fs::write(&source, b"something else").unwrap();
+    let err = ola
+        .download(ala_id, id, &offer, &downloads, |_| {})
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("changed or disappeared"),
+        "{err:#}"
+    );
+
+    // Same length, different bytes: caught by the hash and nothing is kept.
+    let mut forged = content.clone();
+    forged[123_456] ^= 0xff;
+    std::fs::write(&source, &forged).unwrap();
+    let err = ola
+        .download(ala_id, id, &offer, &downloads, |_| {})
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("damaged"), "{err:#}");
+    assert!(!downloads.join(format!(".{id}.szept-part")).exists());
+    assert!(!downloads.join("instalator (2).exe").exists());
+
+    // Withdrawn: refused.
+    ala.unshare(&id);
+    assert!(
+        ola.download(ala_id, id, &offer, &downloads, |_| {})
+            .await
+            .is_err()
+    );
+
+    ala.shutdown().await;
+    ola.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(downloads);
+}

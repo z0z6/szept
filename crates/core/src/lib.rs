@@ -4,6 +4,8 @@
 //! the future graphical client share one implementation.
 
 pub mod contacts;
+pub mod crypto;
+pub mod files;
 pub mod identity;
 pub mod node;
 pub mod protocol;
@@ -12,4 +14,4 @@ pub use contacts::Contacts;
 pub use identity::Identity;
 pub use iroh::{EndpointAddr, EndpointId};
 pub use node::{Event, Network, Node};
-pub use protocol::{MessageId, Outgoing};
+pub use protocol::{Content, FileOffer, MessageId, Outgoing};

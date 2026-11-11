@@ -114,3 +114,116 @@ fn identifiers_travel_through_qr_links() {
     ala.stop();
     ola.stop();
 }
+
+#[test]
+fn a_file_goes_from_one_app_to_the_other() {
+    let (ala, ala_events) = new_app();
+    let (ola, ola_events) = new_app();
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    ola.add_contact("ala".into(), ala.my_id()).unwrap();
+    let address = format!("127.0.0.1:{}", ola.listening_port());
+    ala.connect_direct(ola.my_id(), address).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("komunikator-ffi-file-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("zdjęcie wakacje.jpg");
+    let content: Vec<u8> = (0..700_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&source, &content).unwrap();
+
+    let sent = ala
+        .send_file(ola.my_id(), source.to_string_lossy().into_owned())
+        .unwrap();
+    assert_eq!(
+        (sent.name.as_str(), sent.size),
+        ("zdjęcie wakacje.jpg", 700_000)
+    );
+
+    let offer = loop {
+        match ola_events.recv_timeout(WAIT).unwrap() {
+            ChatEvent::FileOffered {
+                id,
+                name,
+                size,
+                hash,
+                ..
+            } => break (id, name, size, hash),
+            _ => continue,
+        }
+    };
+    assert_eq!(offer.0, sent.id);
+    assert_eq!(
+        (offer.1.as_str(), offer.2),
+        ("zdjęcie wakacje.jpg", 700_000)
+    );
+    assert_eq!(offer.3, sent.hash);
+    loop {
+        if let ChatEvent::Delivered { id, .. } = ala_events.recv_timeout(WAIT).unwrap()
+            && id == sent.id
+        {
+            break;
+        }
+    }
+
+    let downloads = dir.join("pobrane");
+    ola.download(sent.id.clone(), downloads.to_string_lossy().into_owned())
+        .unwrap();
+    let mut saw_progress = false;
+    let saved = loop {
+        match ola_events.recv_timeout(WAIT).unwrap() {
+            ChatEvent::FileProgress { total, .. } => {
+                assert_eq!(total, 700_000);
+                saw_progress = true;
+            }
+            ChatEvent::FileSaved { id, path, .. } => {
+                assert_eq!(id, sent.id);
+                break path;
+            }
+            ChatEvent::FileFailed { reason, .. } => panic!("download failed: {reason}"),
+            _ => {}
+        }
+    };
+    assert!(saw_progress);
+    assert_eq!(std::fs::read(&saved).unwrap(), content);
+    assert!(ola.download("nieznany".into(), String::new()).is_err());
+
+    ala.stop();
+    ola.stop();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn messages_keep_flowing_after_a_network_change() {
+    let (ala, ala_events) = new_app();
+    let (ola, ola_events) = new_app();
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    ola.add_contact("ala".into(), ala.my_id()).unwrap();
+    let address = format!("127.0.0.1:{}", ola.listening_port());
+    ala.connect_direct(ola.my_id(), address).unwrap();
+    loop {
+        if let ChatEvent::Connected { .. } = ala_events.recv_timeout(WAIT).unwrap() {
+            break;
+        }
+    }
+
+    // As when a phone moves from Wi-Fi to mobile data.
+    ala.network_changed();
+    ola.network_changed();
+
+    let id = ala.send(ola.my_id(), "nadal tu jestem".into()).unwrap();
+    loop {
+        if let ChatEvent::Message { id: got, .. } = ola_events.recv_timeout(WAIT).unwrap()
+            && got == id
+        {
+            break;
+        }
+    }
+    loop {
+        if let ChatEvent::Delivered { id: got, .. } = ala_events.recv_timeout(WAIT).unwrap()
+            && got == id
+        {
+            break;
+        }
+    }
+    ala.stop();
+    ola.stop();
+}

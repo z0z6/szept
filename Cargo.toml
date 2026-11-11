@@ -11,7 +11,9 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1"
-iroh = "1.4"
+# aws-lc-rs instead of ring: it has the hybrid post-quantum key exchange
+# X25519MLKEM768 (see crates/core/src/crypto.rs).
+iroh = { version = "1.4", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }

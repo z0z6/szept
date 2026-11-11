@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Folders whose files Szept may hand to other apps (to open or install). -->
+<paths>
+    <files-path name="incoming" path="incoming/" />
+    <files-path name="outgoing" path="outgoing/" />
+</paths>

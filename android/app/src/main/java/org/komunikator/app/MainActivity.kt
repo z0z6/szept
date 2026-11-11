@@ -3,14 +3,16 @@ package org.komunikator.app
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -95,7 +97,7 @@ import uniffi.komunikator_ffi.qrCode
 import uniffi.komunikator_ffi.shareLink
 
 class MainActivity : ComponentActivity() {
-    private val model: ChatViewModel by viewModels()
+    private val model: Messenger by lazy { (application as SzeptApp).messenger }
 
     // Without the permission Android 13+ hides every notification.
     private val askNotifications =
@@ -103,6 +105,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SzeptService.start(this)
         openFrom(intent)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -112,7 +115,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
             MaterialTheme(colorScheme = colors) {
-                Surface(modifier = Modifier.fillMaxSize()) { Root(model) }
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Root(model, onRestart = { SzeptService.start(this) })
+                }
             }
         }
     }
@@ -141,13 +146,24 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Root(model: ChatViewModel) {
+private fun Root(model: Messenger, onRestart: () -> Unit) {
     val state by model.state.collectAsState()
     val open = state.contacts.firstOrNull { it.id == state.openId }
 
     BackHandler(enabled = open != null) { model.open(null) }
 
     when {
+        state.stopped -> Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Szept jest wyłączony", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Nie odbiera wiadomości ani plików, dopóki go nie włączysz.",
+                    modifier = Modifier.padding(vertical = 12.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onRestart) { Text("Włącz") }
+            }
+        }
         !state.ready && state.error == null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             CircularProgressIndicator()
         }
@@ -156,6 +172,8 @@ private fun Root(model: ChatViewModel) {
             online = open.id in state.online,
             messages = state.messages[open.id].orEmpty(),
             onSend = { model.send(open.id, it) },
+            onSendFiles = { model.sendFiles(open.id, it) },
+            onDownload = { model.download(open.id, it) },
             onBack = { model.open(null) },
         )
         else -> ContactsScreen(
@@ -209,6 +227,7 @@ private fun ContactsScreen(
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
             item { MyIdCard(state.myId) }
+            item { BatteryCard() }
             if (state.contacts.isEmpty()) {
                 item {
                     Text(
@@ -232,8 +251,10 @@ private fun ContactsScreen(
                     supportingContent = {
                         val preview = when {
                             last == null -> if (online) "Połączony" else "Niepołączony"
-                            last.mine -> "Ty: ${last.body}"
-                            else -> last.body
+                            else -> {
+                                val text = last.file?.let { "📎 ${it.name}" } ?: last.body
+                                if (last.mine) "Ty: $text" else text
+                            }
                         }
                         Text(preview, maxLines = 1)
                     },
@@ -306,6 +327,45 @@ private fun Avatar(alias: String, online: Boolean) {
                     .background(Color(0xFF2E7D6B))
                     .semantics { contentDescription = "online" },
             )
+        }
+    }
+}
+
+/**
+ * Many phones put apps to sleep despite the background service. Offers the
+ * system switch that exempts Szept, until it is on or the person says no.
+ */
+@Composable
+private fun BatteryCard() {
+    val context = LocalContext.current
+    val power = remember { context.getSystemService(PowerManager::class.java) }
+    var exempt by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+    var dismissed by rememberSaveable { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        exempt = power.isIgnoringBatteryOptimizations(context.packageName)
+    }
+    if (exempt || dismissed) return
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Odbieranie w tle", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Żeby wiadomości i pliki docierały przy wygaszonym ekranie, " +
+                    "pozwól Szeptowi działać bez oszczędzania baterii.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+            Row {
+                TextButton(onClick = {
+                    val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        .setData(Uri.parse("package:" + context.packageName))
+                    try {
+                        ask.launch(request)
+                    } catch (e: Exception) {
+                        ask.launch(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    }
+                }) { Text("Pozwól") }
+                TextButton(onClick = { dismissed = true }) { Text("Nie teraz") }
+            }
         }
     }
 }
@@ -484,9 +544,14 @@ private fun ChatScreen(
     online: Boolean,
     messages: List<Message>,
     onSend: (String) -> Unit,
+    onSendFiles: (List<Uri>) -> Unit,
+    onDownload: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     var draft by remember(contact.id) { mutableStateOf(TextFieldValue("")) }
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) onSendFiles(uris)
+    }
     var picking by remember(contact.id) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
@@ -530,6 +595,10 @@ private fun ChatScreen(
                         },
                         modifier = Modifier.semantics { contentDescription = "Emoji" },
                     ) { Text("😊", fontSize = 22.sp) }
+                    IconButton(
+                        onClick = { pickFiles.launch(arrayOf("*/*")) },
+                        modifier = Modifier.semantics { contentDescription = "Wyślij pliki" },
+                    ) { Text("📎", fontSize = 22.sp) }
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
@@ -574,14 +643,17 @@ private fun ChatScreen(
             if (messages.isEmpty()) {
                 item {
                     Text(
-                        "Napisz pierwszą wiadomość. Rozmowa trwa, dopóki Szept jest otwarty.",
+                        "Napisz pierwszą wiadomość albo wyślij plik spinaczem. Rozmowa trwa, dopóki Szept jest otwarty.",
                         modifier = Modifier.padding(24.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             items(messages.size, key = { messages[it].id }) { index ->
-                Bubble(messages[index], showWord = index == lastMine)
+                val message = messages[index]
+                Bubble(message, showWord = index == lastMine) {
+                    FileCard(message.file!!, message.mine, contact.alias) { onDownload(message.id) }
+                }
             }
         }
     }
@@ -590,7 +662,7 @@ private fun ChatScreen(
 private val timeFormat: DateFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
 
 @Composable
-private fun Bubble(message: Message, showWord: Boolean) {
+private fun Bubble(message: Message, showWord: Boolean, fileContent: @Composable () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -602,7 +674,7 @@ private fun Bubble(message: Message, showWord: Boolean) {
             modifier = Modifier.widthIn(max = 300.dp),
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(message.body)
+                if (message.file != null) fileContent() else Text(message.body)
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     verticalAlignment = Alignment.CenterVertically,

@@ -6,17 +6,22 @@
 
 mod store;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
-use komunikator_ffi::{App, AppError, ChatEvent, EventListener, qr_code, share_link};
+use komunikator_ffi::{App, AppError, ChatEvent, EventListener, file_kind, qr_code, share_link};
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State, UserAttentionType, WebviewUrl,
+    AppHandle, DragDropEvent, Emitter, Manager, RunEvent, State, UserAttentionType, WebviewUrl,
     WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 
-use crate::store::{Message, Status, Store};
+use crate::store::{FileInfo, Message, Status, Store, Transfer};
 
 /// Everything the commands share.
 struct Shared {
@@ -59,9 +64,16 @@ struct ChatView {
 #[derive(Clone, Serialize)]
 struct Changed {
     peer: String,
-    /// "incoming", "sent", "delivered" or "other": lets the windows play
-    /// the matching sound.
+    /// "incoming", "sent", "delivered", "saved" or "other": lets the windows
+    /// play the matching sound.
     kind: &'static str,
+}
+
+/// Something went wrong for `peer` outside a command the window awaits.
+#[derive(Clone, Serialize)]
+struct Problem {
+    peer: String,
+    text: String,
 }
 
 #[tauri::command]
@@ -183,6 +195,154 @@ fn send(
     Ok(())
 }
 
+/// Lets the person pick files and offers them to `peer`.
+#[tauri::command]
+async fn send_files(app: AppHandle, peer: String) -> CommandResult<()> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Wybierz pliki do wysłania")
+        .blocking_pick_files();
+    let paths: Vec<PathBuf> = picked
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|file| file.into_path().ok())
+        .collect();
+    send_paths(app, peer, paths);
+    Ok(())
+}
+
+/// Offers files to `peer` in the background: each one is hashed first,
+/// which takes a moment for big files.
+fn send_paths(app: AppHandle, peer: String, paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        for path in paths {
+            match shared
+                .core
+                .send_file(peer.clone(), path.to_string_lossy().into_owned())
+            {
+                Ok(sent) => {
+                    // Let the windows show pictures and play music we send.
+                    let _ = app.asset_protocol_scope().allow_file(&path);
+                    let file = FileInfo {
+                        kind: file_kind(sent.name.clone()),
+                        name: sent.name,
+                        size: sent.size,
+                        hash: sent.hash,
+                        transfer: Transfer::Shared,
+                        done: sent.size,
+                        path: Some(path.to_string_lossy().into_owned()),
+                        reason: None,
+                    };
+                    shared
+                        .store
+                        .lock()
+                        .unwrap()
+                        .push(&peer, Message::outgoing_file(sent.id, file));
+                    notify_changed(&app, peer.clone(), "other");
+                }
+                Err(err) => {
+                    let name = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
+                    let _ = app.emit(
+                        "problem",
+                        Problem {
+                            peer: peer.clone(),
+                            text: format!("Nie udało się wysłać {name}: {err}"),
+                        },
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// Starts or resumes fetching a file the contact offered.
+#[tauri::command]
+fn download(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    peer: String,
+    id: String,
+) -> CommandResult<()> {
+    let dir = downloads_dir(&app)?;
+    shared
+        .core
+        .download(id.clone(), dir.to_string_lossy().into_owned())
+        .map_err(failed)?;
+    shared
+        .store
+        .lock()
+        .unwrap()
+        .set_transfer(&peer, &id, |file| {
+            file.transfer = Transfer::Downloading;
+            file.reason = None;
+        });
+    notify_changed(&app, peer, "other");
+    Ok(())
+}
+
+/// Opens a received or sent file in its usual app. Programs are refused:
+/// they are run on purpose, from the folder.
+#[tauri::command]
+fn open_file(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    peer: String,
+    id: String,
+) -> CommandResult<()> {
+    let file = local_file(&shared, &peer, &id)?;
+    if file.kind == "program" {
+        return Err("Programy uruchamiaj świadomie, z folderu.".into());
+    }
+    app.opener()
+        .open_path(file.path.unwrap_or_default(), None::<&str>)
+        .map_err(|err| err.to_string())
+}
+
+/// Shows a received or sent file in the system file manager.
+#[tauri::command]
+fn reveal(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    peer: String,
+    id: String,
+) -> CommandResult<()> {
+    let file = local_file(&shared, &peer, &id)?;
+    app.opener()
+        .reveal_item_in_dir(file.path.unwrap_or_default())
+        .map_err(|err| err.to_string())
+}
+
+fn local_file(shared: &Shared, peer: &str, id: &str) -> CommandResult<FileInfo> {
+    let file = shared
+        .store
+        .lock()
+        .unwrap()
+        .file(peer, id)
+        .ok_or("nie ma takiego pliku")?;
+    match &file.path {
+        Some(path) if Path::new(path).exists() => Ok(file),
+        _ => Err("Tego pliku nie ma już na dysku.".into()),
+    }
+}
+
+/// Where received files go: a "Szept" folder inside Downloads.
+fn downloads_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+    let base = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|err| err.to_string())?;
+    Ok(base.join("Szept"))
+}
+
 /// Turns pasted or scanned text into an identifier, or explains why not.
 #[tauri::command]
 fn normalize_id(text: String) -> CommandResult<String> {
@@ -207,22 +367,89 @@ impl EventListener for Listener {
                 sent_at_ms,
                 body,
             } => {
-                let window = self.app.get_webview_window(&chat_label(&peer));
-                let seen = window
-                    .as_ref()
-                    .is_some_and(|window| window.is_focused().unwrap_or(false));
-                let fresh = shared
+                let message = Message {
+                    id,
+                    mine: false,
+                    body,
+                    at_ms: sent_at_ms,
+                    status: Status::Received,
+                    file: None,
+                };
+                self.incoming(peer, message);
+            }
+            ChatEvent::FileOffered {
+                peer,
+                id,
+                sent_at_ms,
+                name,
+                size,
+                hash,
+            } => {
+                let file = FileInfo {
+                    kind: file_kind(name.clone()),
+                    name,
+                    size,
+                    hash,
+                    transfer: Transfer::Offered,
+                    done: 0,
+                    path: None,
+                    reason: None,
+                };
+                let message = Message {
+                    id,
+                    mine: false,
+                    body: String::new(),
+                    at_ms: sent_at_ms,
+                    status: Status::Received,
+                    file: Some(file),
+                };
+                self.incoming(peer, message);
+            }
+            ChatEvent::FileProgress {
+                peer,
+                id,
+                done,
+                total: _,
+            } => {
+                let changed = shared
                     .store
                     .lock()
                     .unwrap()
-                    .receive(&peer, id, sent_at_ms, body, seen);
-                if !fresh {
-                    return;
+                    .set_transfer(&peer, &id, |file| {
+                        file.transfer = Transfer::Downloading;
+                        file.done = done;
+                    });
+                if changed {
+                    notify_changed(&self.app, peer, "other");
                 }
-                if !seen {
-                    self.alert(&peer, window);
+            }
+            ChatEvent::FileSaved { peer, id, path } => {
+                let _ = self.app.asset_protocol_scope().allow_file(&path);
+                let changed = shared
+                    .store
+                    .lock()
+                    .unwrap()
+                    .set_transfer(&peer, &id, |file| {
+                        file.transfer = Transfer::Saved;
+                        file.done = file.size;
+                        file.path = Some(path);
+                    });
+                if changed {
+                    notify_changed(&self.app, peer, "saved");
                 }
-                notify_changed(&self.app, peer, "incoming");
+            }
+            ChatEvent::FileFailed { peer, id, reason } => {
+                let changed = shared
+                    .store
+                    .lock()
+                    .unwrap()
+                    .set_transfer(&peer, &id, |file| {
+                        file.transfer = Transfer::Failed;
+                        file.reason = Some(reason);
+                    });
+                if changed {
+                    notify_changed(&self.app, peer, "other");
+                }
             }
             ChatEvent::Sent { peer, id } => {
                 let changed = shared
@@ -250,6 +477,23 @@ impl EventListener for Listener {
 }
 
 impl Listener {
+    /// Stores something the contact sent and signals it if unseen.
+    fn incoming(&self, peer: String, message: Message) {
+        let shared = self.app.state::<Shared>();
+        let window = self.app.get_webview_window(&chat_label(&peer));
+        let seen = window
+            .as_ref()
+            .is_some_and(|window| window.is_focused().unwrap_or(false));
+        let fresh = shared.store.lock().unwrap().receive(&peer, message, seen);
+        if !fresh {
+            return;
+        }
+        if !seen {
+            self.alert(&peer, window);
+        }
+        notify_changed(&self.app, peer, "incoming");
+    }
+
     /// Tells the person about a message they have not seen: a system
     /// notification without the text, so nothing leaks onto the screen,
     /// and a highlight on the window in the taskbar.
@@ -338,6 +582,8 @@ fn allow_camera(_window: &tauri::WebviewWindow) {}
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -352,12 +598,22 @@ fn main() {
             if let Some(main) = app.get_webview_window("main") {
                 allow_camera(&main);
             }
+            // Pictures and music already received can be shown and played.
+            if let Ok(dir) = downloads_dir(app.handle()) {
+                let _ = app.asset_protocol_scope().allow_directory(dir, true);
+            }
             Ok(())
         })
         .on_window_event(|window, event| match event {
             // Closing the contact list closes the whole app.
             WindowEvent::CloseRequested { .. } if window.label() == "main" => {
                 window.app_handle().exit(0);
+            }
+            // Files dropped onto a conversation are offered to that contact.
+            WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                if let Some(peer) = window.label().strip_prefix("chat-") {
+                    send_paths(window.app_handle().clone(), peer.to_owned(), paths.clone());
+                }
             }
             // Looking at a conversation counts as reading it.
             WindowEvent::Focused(true) => {
@@ -376,6 +632,10 @@ fn main() {
             chat,
             mark_read,
             send,
+            send_files,
+            download,
+            open_file,
+            reveal,
             normalize_id,
         ])
         .build(tauri::generate_context!())

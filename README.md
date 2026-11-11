@@ -25,6 +25,24 @@ szept chat ala --local --direct 192.168.1.20:PORT
 
 Opcję `--direct` podaje jedna strona. Druga czeka na połączenie.
 
+W rozmowie `/plik <ścieżka>` wysyła plik, a `/pobierz <numer>` pobiera ofertę do bieżącego katalogu.
+
+## Pliki
+
+Szept przesyła pliki dowolnego typu, także programy (`.exe`, `.apk`, `.deb`, `.AppImage`), bezpośrednio między urządzeniami, bez żadnego serwera z plikami:
+
+- nadawca wysyła ofertę: nazwę, rozmiar i skrót BLAKE3; plik zostaje na jego urządzeniu;
+- odbiorca pobiera go prosto od nadawcy tym samym szyfrowanym połączeniem; przerwane pobieranie wznawia się od miejsca przerwania;
+- po pobraniu skrót jest sprawdzany i plik niezgodny z ofertą jest usuwany, więc podmiana po drodze albo u nadawcy nie przejdzie;
+- pobrać plik może tylko kontakt, któremu go zaoferowano;
+- nazwy z sieci, które mogłyby wyjść poza folder pobranych (`../`, nazwy urządzeń Windows), są odrzucane, a istniejący plik nigdy nie jest nadpisywany.
+
+Nadawca musi mieć Szept włączony, dopóki odbiorca nie pobierze pliku. Oferty żyją do zamknięcia aplikacji, a na Androidzie wysyłany plik jest najpierw kopiowany do prywatnej pamięci aplikacji.
+
+Programy nigdy nie otwierają się same. Przy programie od kontaktu widać ostrzeżenie i początek skrótu („odcisk”), który można porównać z nadawcą innym kanałem. Na komputerze program uruchamia się z folderu, a na Androidzie przycisk „Zainstaluj” przekazuje APK systemowemu instalatorowi, który i tak pyta o zgodę. Zdjęcia mają podgląd, a muzykę i nagrania można odtworzyć w rozmowie (na komputerze).
+
+Pobrane pliki trafiają do `Pobrane/Szept` na komputerze i do prywatnej pamięci aplikacji na Androidzie, skąd „Zapisz jako…” kopiuje je w wybrane miejsce.
+
 ## Wspólne dla aplikacji okienkowych
 
 - Każdy ma swój kod QR z identyfikatorem (`szept:<identyfikator>`). Kontakt dodaje się, skanując kod drugiej osoby aparatem lub kamerą internetową, wczytując obraz z kodem (na komputerze) albo wklejając identyfikator.
@@ -33,15 +51,16 @@ Opcję `--direct` podaje jedna strona. Druga czeka na połączenie.
 - Nowa wiadomość w rozmowie, której nie masz przed oczami, daje powiadomienie systemowe i licznik nieprzeczytanych. Powiadomienie pokazuje nadawcę, nigdy treść.
 - Emoji to zwykłe znaki Unicode rysowane systemową czcionką.
 
-Ograniczenia: wiadomości przychodzą tylko przy uruchomionej aplikacji, a historia rozmów żyje w pamięci do jej zamknięcia.
+Wiadomości i pliki przychodzą także w tle, przez Wi‑Fi i dane mobilne: na komputerze, dopóki okno Szeptu jest otwarte (choćby zminimalizowane), na Androidzie, dopóki aplikacja nie zostanie wyłączona przyciskiem „Wyłącz” w jej powiadomieniu albo zatrzymana w ustawieniach systemu. Po zmianie sieci Szept od razu łączy się ponownie. Historia rozmów żyje w pamięci do zamknięcia aplikacji.
 
 ## Android
 
 Aplikacja (`android/`, Kotlin i Jetpack Compose) korzysta z rdzenia w Ruście przez wygenerowane wiązania UniFFI. Skaner kodów to ZXing (Apache 2.0, bez usług Google), wybór emoji to systemowy `EmojiPickerView` z AndroidX. Aparat jest opcjonalny: bez niego identyfikator się wkleja.
 
+W tle działa usługa pierwszoplanowa typu „remote messaging” (przewidziana w Androidzie dla komunikatorów), widoczna jako ciche, stałe powiadomienie z przyciskiem „Wyłącz”. Zsunięcie aplikacji z listy ostatnich jej nie zatrzymuje. Szept nie korzysta z Google FCM, więc na telefonach, które agresywnie oszczędzają baterię, warto pozwolić mu działać bez optymalizacji (aplikacja sama o to zapyta). Utrzymywanie połączenia zużywa trochę baterii.
+
 Ograniczenia tej wersji:
 
-- brak usługi w tle: Android po pewnym czasie usypia aplikację w tle;
 - APK jest podpisany kluczem debug, innym przy każdym buildzie w CI, więc przed instalacją nowszej wersji trzeba odinstalować starą (razem z tożsamością i kontaktami).
 
 Build lokalny: `bash scripts/build-android.sh` (wymaga Android SDK i NDK, JDK 17 lub 21 oraz `cargo install cargo-ndk`). APK trafia do `android/app/build/outputs/apk/debug/`. Architektury: arm64-v8a (telefony) i x86_64 (emulator).
@@ -71,17 +90,21 @@ Build lokalny: w `crates/desktop` uruchom `npm ci`, a potem `npx tauri build`. N
 Co jest:
 
 - tożsamość to para kluczy Ed25519 generowana na urządzeniu;
-- połączenie jest szyfrowane end-to-end (TLS 1.3 w QUIC), obie strony dowodzą swojego klucza, także gdy pakiety idą przez przekaźnik;
+- połączenie jest szyfrowane end-to-end (TLS 1.3 w QUIC, rustls z aws-lc-rs), obie strony dowodzą swojego klucza Ed25519, także gdy pakiety idą przez przekaźnik;
+- wymiana kluczy jest hybrydowa i odporna na komputery kwantowe: X25519MLKEM768, czyli X25519 połączone z ML-KEM-768 (NIST FIPS 203). Nagrany dziś ruch pozostaje tajny, dopóki nie zostaną złamane oba algorytmy. Dwa urządzenia z Szeptem zawsze uzgadniają hybrydę, a podpisane uzgadnianie TLS 1.3 nie pozwala atakującemu zepchnąć ich do samego X25519. Klasyczne grupy zostają tylko dla serwerów pomocniczych iroh i starszych wersji Szeptu. Test w `crates/core/src/crypto.rs` sprawdza to na prawdziwym połączeniu z węzłem, który przyjmuje wyłącznie hybrydę;
+- dane w połączeniu chroni AES-GCM albo ChaCha20-Poly1305, z nowymi kluczami dla każdego połączenia (forward secrecy);
 - połączenia przyjmowane są tylko od osób z listy kontaktów;
+- pliki idą bezpośrednio między urządzeniami i są sprawdzane skrótem BLAKE3;
+- historia rozmów nie jest nigdzie zapisywana: znika po zamknięciu aplikacji;
 - limity rozmiaru ramek i wiadomości;
 - `unsafe` zabroniony w rdzeniu i kliencie terminalowym (most `crates/ffi` zawiera go tylko w kodzie generowanym przez UniFFI).
 
 Czego jeszcze nie ma:
 
 - Double Ratchet nad transportem (ochrona wiadomości czekających w kolejce i zapisanych);
-- szyfrowania danych na dysku: klucz leży w pliku `identity.key` z prawami tylko dla właściciela;
-- hybrydowej wymiany kluczy odpornej na komputery kwantowe;
-- ukrycia adresu IP przed kontaktami;
+- szyfrowania danych na dysku: klucz leży w pliku `identity.key` z prawami tylko dla właściciela, a pobrane pliki leżą w zwykłym folderze. Przed kimś, kto dostanie Twój komputer lub telefon do ręki, chroni dziś tylko szyfrowanie całego dysku (LUKS, BitLocker, FileVault, szyfrowanie Androida) i blokada ekranu;
+- podpisów odpornych na komputery kwantowe: tożsamość to nadal Ed25519. To zagraża tylko podszywaniu się w przyszłości, nie poufności nagranego dziś ruchu;
+- ukrycia adresu IP przed kontaktami; publiczne serwery pomocnicze iroh widzą, kto z kim się łączy (tryb `--local` albo własny przekaźnik tego unika);
 - niezależnego audytu.
 
 ## Budowanie
