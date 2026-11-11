@@ -17,7 +17,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-use crate::EventListener;
+use crate::{ChatEvent, EventListener};
 
 /// How often offline contacts are dialled again.
 const RETRY_EVERY: Duration = Duration::from_secs(10);
@@ -51,7 +51,7 @@ pub(crate) async fn run(
                     Command::Send { peer, message } => {
                         outbox.entry(peer).or_default().push_back(message);
                         if node.is_connected(&peer) {
-                            flush(&node, peer, &mut outbox).await;
+                            flush(&node, peer, &mut outbox, &*listener).await;
                         }
                     }
                     Command::ContactAdded(peer) => {
@@ -66,10 +66,16 @@ pub(crate) async fn run(
             }
             event = events.recv() => {
                 let Some(event) = event else { break };
-                if let Event::Connected { peer } = &event {
-                    flush(&node, *peer, &mut outbox).await;
-                }
+                let connected = match &event {
+                    Event::Connected { peer } => Some(*peer),
+                    _ => None,
+                };
+                // Report the connection before the queued messages go out,
+                // so the interface sees "connected" ahead of "sent".
                 listener.on_event(event.into());
+                if let Some(peer) = connected {
+                    flush(&node, peer, &mut outbox, &*listener).await;
+                }
             }
             _ = retry.tick() => {
                 if dial_by_id {
@@ -100,11 +106,13 @@ fn dial(node: &Node, addr: EndpointAddr, dialling: &mut HashMap<EndpointId, Join
 }
 
 /// Sends the queued messages for `peer` in order, stopping at the first
-/// failure. What is left goes out after the next reconnect.
+/// failure. What is left goes out after the next reconnect. Every message
+/// that leaves is reported as [`ChatEvent::Sent`].
 async fn flush(
     node: &Node,
     peer: EndpointId,
     outbox: &mut HashMap<EndpointId, VecDeque<Outgoing>>,
+    listener: &dyn EventListener,
 ) {
     let Some(queue) = outbox.get_mut(&peer) else {
         return;
@@ -113,6 +121,10 @@ async fn flush(
         if node.send(peer, message).await.is_err() {
             return;
         }
+        listener.on_event(ChatEvent::Sent {
+            peer: peer.to_string(),
+            id: message.id.to_string(),
+        });
         queue.pop_front();
     }
 }

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rozmowa – Szept</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="chat">
+    <header class="chat-head">
+      <span class="avatar" id="avatar" aria-hidden="true"></span>
+      <div>
+        <h1 id="alias"></h1>
+        <p id="presence" role="status"></p>
+      </div>
+    </header>
+
+    <section class="messages" id="messages" aria-label="Wiadomości" aria-live="polite"></section>
+
+    <form class="composer" id="composer">
+      <div class="emoji-panel" id="emoji-panel" hidden>
+        <div class="emoji-tabs" id="emoji-tabs" role="tablist" aria-label="Kategorie emoji"></div>
+        <div class="emoji-grid" id="emoji-grid" role="tabpanel"></div>
+        <p class="emoji-hint" id="emoji-hint" hidden></p>
+      </div>
+      <button class="icon-button emoji-toggle" id="emoji-toggle" type="button"
+        aria-label="Emoji" aria-expanded="false" aria-controls="emoji-panel">😊</button>
+      <label class="visually-hidden" for="draft">Wiadomość</label>
+      <textarea id="draft" rows="1" placeholder="Wiadomość"></textarea>
+      <button class="button primary" id="send" type="submit" disabled>Wyślij</button>
+    </form>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="emoji.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>

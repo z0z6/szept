@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Szept</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="main">
+    <h1 class="brand"><span id="logo"></span>Szept</h1>
+
+    <section class="my-code" aria-labelledby="my-code-title">
+      <button class="qr-button" id="qr-small" type="button" aria-label="Powiększ kod QR"></button>
+      <div>
+        <h2 id="my-code-title">Twój kod</h2>
+        <p>Pokaż go drugiej osobie albo prześlij jej identyfikator.</p>
+        <div class="actions">
+          <button class="button" id="copy-id" type="button">Kopiuj identyfikator</button>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="contacts-title">
+      <div class="contacts-head">
+        <h2 id="contacts-title">Kontakty</h2>
+        <button class="button primary" id="add" type="button">Dodaj kontakt</button>
+      </div>
+      <ul class="contact-list" id="contacts"></ul>
+      <p class="empty" id="no-contacts" hidden>
+        Nie masz jeszcze kontaktów. Zeskanuj kod drugiej osoby przyciskiem Dodaj kontakt
+        i pokaż jej swój, żeby mogła dodać Ciebie.
+      </p>
+    </section>
+
+    <footer class="footer">
+      <label class="switch"><input type="checkbox" id="sounds"> Dźwięki</label>
+      <span id="status" role="status"></span>
+    </footer>
+  </main>
+
+  <dialog id="qr-dialog" aria-labelledby="qr-dialog-title">
+    <h2 id="qr-dialog-title">Twój kod</h2>
+    <div class="qr-large" id="qr-large"></div>
+    <p class="identifier" id="my-id"></p>
+    <div class="dialog-actions">
+      <button class="button" type="button" data-close>Zamknij</button>
+    </div>
+  </dialog>
+
+  <dialog id="add-dialog" aria-labelledby="add-dialog-title">
+    <form id="add-form" method="dialog">
+      <h2 id="add-dialog-title">Nowy kontakt</h2>
+      <div class="scan-tools">
+        <button class="button" id="scan" type="button">Skanuj kamerą</button>
+        <label class="button" for="scan-file">Wczytaj obraz z kodem</label>
+        <input class="visually-hidden" id="scan-file" type="file" accept="image/*">
+      </div>
+      <div class="scanner" id="scanner" hidden>
+        <video id="video" playsinline muted></video>
+      </div>
+      <p class="hint" id="scan-status" role="status" hidden></p>
+      <label class="field">Identyfikator
+        <textarea id="new-id" rows="3" spellcheck="false" autocomplete="off" required></textarea>
+      </label>
+      <label class="field">Nazwa (jedno słowo)
+        <input id="new-alias" autocomplete="off" spellcheck="false" required>
+      </label>
+      <p class="error" id="add-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" id="add-confirm" type="submit">Dodaj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remove-dialog" aria-labelledby="remove-title">
+    <h2 id="remove-title"></h2>
+    <p>Rozmowa zniknie, a ta osoba nie będzie mogła się z Tobą połączyć.</p>
+    <div class="dialog-actions">
+      <button class="button" type="button" data-close>Anuluj</button>
+      <button class="button danger" id="remove-confirm" type="button">Usuń</button>
+    </div>
+  </dialog>
+
+  <script src="vendor/jsQR.js"></script>
+  <script src="common.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

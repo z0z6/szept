@@ -2,7 +2,7 @@
 
 Szyfrowany komunikator tekstowy P2P: bez kont, bez numeru telefonu i bez serwera przechowującego wiadomości.
 
-**Stan: kamień milowy 1 plus wczesna aplikacja na Androida.** Działa rdzeń, klient terminalowy i prosta aplikacja do rozmów 1:1. To wersja deweloperska, jeszcze nie do poufnej komunikacji (patrz „Bezpieczeństwo”).
+**Stan: kamień milowy 1 plus wczesne aplikacje okienkowe.** Działa rdzeń, klient terminalowy oraz aplikacje do rozmów 1:1 na Androida, Linuksa, Windows i macOS. To wersja deweloperska, jeszcze nie do poufnej komunikacji (patrz „Bezpieczeństwo”).
 
 ## Szybki start
 
@@ -25,18 +25,40 @@ szept chat ala --local --direct 192.168.1.20:PORT
 
 Opcję `--direct` podaje jedna strona. Druga czeka na połączenie.
 
+## Wspólne dla aplikacji okienkowych
+
+- Każdy ma swój kod QR z identyfikatorem (`szept:<identyfikator>`). Kontakt dodaje się, skanując kod drugiej osoby aparatem lub kamerą internetową, wczytując obraz z kodem (na komputerze) albo wklejając identyfikator.
+- Dodanie działa w jedną stronę: druga osoba też musi dodać Ciebie, bo Szept przyjmuje połączenia tylko od zapisanych kontaktów.
+- Każdy kontakt ma osobną rozmowę. Twoje wiadomości mają status: w kolejce, wysłano (✓) i dostarczono (✓✓).
+- Nowa wiadomość w rozmowie, której nie masz przed oczami, daje powiadomienie systemowe i licznik nieprzeczytanych. Powiadomienie pokazuje nadawcę, nigdy treść.
+- Emoji to zwykłe znaki Unicode rysowane systemową czcionką.
+
+Ograniczenia: wiadomości przychodzą tylko przy uruchomionej aplikacji, a historia rozmów żyje w pamięci do jej zamknięcia.
+
 ## Android
 
-Aplikacja (`android/`, Kotlin i Jetpack Compose) korzysta z tego samego rdzenia w Ruście przez wygenerowane wiązania UniFFI. Ma listę kontaktów, dodawanie kontaktu po identyfikatorze i rozmowę z kolejką dla nieobecnych.
+Aplikacja (`android/`, Kotlin i Jetpack Compose) korzysta z rdzenia w Ruście przez wygenerowane wiązania UniFFI. Skaner kodów to ZXing (Apache 2.0, bez usług Google), wybór emoji to systemowy `EmojiPickerView` z AndroidX. Aparat jest opcjonalny: bez niego identyfikator się wkleja.
 
 Ograniczenia tej wersji:
 
-- wiadomości przychodzą tylko przy otwartej aplikacji (brak usługi w tle i powiadomień);
-- historia rozmów jest w pamięci i znika, gdy Android zamknie proces;
-- APK jest podpisany kluczem debug, innym przy każdym buildzie w CI, więc przed instalacją nowszej wersji trzeba odinstalować starą (razem z tożsamością i kontaktami);
-- identyfikator wpisuje się lub wkleja, skanowania kodów QR jeszcze nie ma.
+- brak usługi w tle: Android po pewnym czasie usypia aplikację w tle;
+- APK jest podpisany kluczem debug, innym przy każdym buildzie w CI, więc przed instalacją nowszej wersji trzeba odinstalować starą (razem z tożsamością i kontaktami).
 
 Build lokalny: `bash scripts/build-android.sh` (wymaga Android SDK i NDK, JDK 17 lub 21 oraz `cargo install cargo-ndk`). APK trafia do `android/app/build/outputs/apk/debug/`. Architektury: arm64-v8a (telefony) i x86_64 (emulator).
+
+## Linux, Windows i macOS
+
+Aplikacja (`crates/desktop`, [Tauri 2](https://tauri.app)) ma okno z kontaktami i osobne okno dla każdej rozmowy. Interfejs to strony HTML w systemowym silniku przeglądarki, więc emoji wyglądają jak w reszcie systemu, a na Windows (Win + .) i macOS (Ctrl + Cmd + Spacja) działa systemowy wybór emoji. Kody QR odczytuje [jsQR](https://github.com/cozmo/jsQR) (Apache 2.0) lokalnie, bez wysyłania obrazu dokądkolwiek.
+
+Paczki z CI:
+
+- Linux: AppImage i .deb, dla dystrybucji z glibc 2.35 i nowszą (Ubuntu 22.04+, Debian 12+, Fedora 36+). Kamera wymaga wtyczek GStreamera; AppImage ma je w środku, a .deb doinstaluje `gstreamer1.0-plugins-good`.
+- Windows 10 i 11: instalator `-setup.exe`. Korzysta z WebView2, który jest w systemie.
+- macOS 12+ na procesorach Apple: `.dmg`, podpisany tylko lokalnie (ad hoc). Przy pierwszym uruchomieniu kliknij aplikację z wciśniętym Ctrl i wybierz „Otwórz”.
+
+Aplikacja okienkowa ma własną tożsamość, osobną od klienta terminalowego.
+
+Build lokalny: w `crates/desktop` uruchom `npm ci`, a potem `npx tauri build`. Na Linuksie potrzebne są `libwebkit2gtk-4.1-dev`, `libxdo-dev` i `librsvg2-dev`.
 
 ## Sieć i „brak serwera”
 
@@ -71,23 +93,24 @@ cargo test --workspace
 cargo build --release -p komunikator-cli    # target/release/szept
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) przy każdym pushu sprawdza format, clippy i testy oraz buduje binaria dla Linuksa, Windows i macOS i APK dla Androida. Tag `v*` publikuje je jako release z sumami SHA-256. Akcje są przypięte do konkretnych commitów, a Dependabot zgłasza ich aktualizacje.
+GitHub Actions (`.github/workflows/ci.yml`) przy każdym pushu sprawdza format, clippy i testy oraz buduje klienta terminalowego dla Linuksa, Windows i macOS, aplikację okienkową dla tych samych systemów i APK dla Androida. Tag `v*` publikuje je jako release z sumami SHA-256. Akcje są przypięte do konkretnych commitów, a Dependabot zgłasza ich aktualizacje.
 
 ## Układ repozytorium
 
 ```
-crates/core   biblioteka: tożsamość, kontakty, protokół, sieć
-crates/cli    klient terminalowy
-crates/ffi    most dla aplikacji graficznych (UniFFI) z kolejką i ponawianiem połączeń
-android       aplikacja na Androida
-scripts       skrypt budujący APK
+crates/core     biblioteka: tożsamość, kontakty, protokół, sieć
+crates/cli      klient terminalowy
+crates/ffi      most dla aplikacji graficznych (UniFFI): kolejka, ponawianie połączeń, kody QR
+crates/desktop  aplikacja okienkowa na Linuksa, Windows i macOS (Tauri)
+android         aplikacja na Androida
+scripts         skrypt budujący APK
 ```
 
 ## Plan
 
 1. ~~Rdzeń i czat 1:1 w terminalu~~
 2. Double Ratchet, trwała kolejka, zaszyfrowana baza (SQLCipher), klucz w magazynie systemowym
-3. Android: usługa w tle i powiadomienia, kody QR, podpisywanie własnym kluczem; interfejs graficzny na desktop
+3. ~~Kody QR, powiadomienia, aplikacja okienkowa na desktop~~; Android: usługa w tle, podpisywanie własnym kluczem
 4. Załączniki i lokalny sejf na materiały
 5. Backend Proton Drive, grupy, wiele urządzeń
 

@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use komunikator_ffi::{App, ChatEvent, EventListener};
+use komunikator_ffi::{App, ChatEvent, EventListener, normalize_id, qr_code, share_link};
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -70,6 +70,10 @@ fn queued_message_is_delivered_after_connecting() {
     ));
     assert!(matches!(
         ala_events.recv_timeout(WAIT).unwrap(),
+        ChatEvent::Sent { id: got, .. } if got == id
+    ));
+    assert!(matches!(
+        ala_events.recv_timeout(WAIT).unwrap(),
         ChatEvent::Delivered { id: got, .. } if got == id
     ));
     assert!(ala.is_online(ola.my_id()));
@@ -84,4 +88,29 @@ fn queued_message_is_delivered_after_connecting() {
     ala.stop();
     ola.stop();
     assert!(ala.send(ola.my_id(), "za późno".into()).is_err());
+}
+
+#[test]
+fn identifiers_travel_through_qr_links() {
+    let (ala, _events) = new_app();
+    let link = share_link(ala.my_id());
+    assert!(link.starts_with("szept:"));
+    assert_eq!(normalize_id(link.clone()).unwrap(), ala.my_id());
+    assert_eq!(
+        normalize_id(format!("  SZEPT: {}\n", ala.my_id())).unwrap(),
+        ala.my_id()
+    );
+    assert!(normalize_id("szept:".into()).is_err());
+
+    let code = qr_code(link).unwrap();
+    assert_eq!(code.modules.len(), (code.size * code.size) as usize);
+    assert!(code.modules.iter().any(|dark| *dark));
+
+    // A contact can be added straight from the scanned link.
+    let (ola, _ola_events) = new_app();
+    ola.add_contact("ala".into(), share_link(ala.my_id()))
+        .unwrap();
+    assert_eq!(ola.contacts()[0].id, ala.my_id());
+    ala.stop();
+    ola.stop();
 }

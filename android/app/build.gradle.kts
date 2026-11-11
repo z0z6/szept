@@ -41,6 +41,11 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("androidx.core:core-ktx:1.13.1")
+    // The system emoji set, with skin tones and recently used emoji.
+    implementation("androidx.emoji2:emoji2-emojipicker:1.4.0")
+    // QR scanner on top of the camera, Apache 2.0, no Google services.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     // Runtime of the generated Rust bindings.
     implementation("net.java.dev.jna:jna:5.15.0@aar")
 }

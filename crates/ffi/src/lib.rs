@@ -67,6 +67,12 @@ pub enum ChatEvent {
         peer: String,
         id: String,
     },
+    /// Our message `id` left this device. [`ChatEvent::Delivered`] follows
+    /// once the contact's device confirms it.
+    Sent {
+        peer: String,
+        id: String,
+    },
 }
 
 impl From<Event> for ChatEvent {
@@ -95,6 +101,47 @@ impl From<Event> for ChatEvent {
             },
         }
     }
+}
+
+/// A QR code: `size` × `size` modules, row by row, `true` meaning dark.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct QrCode {
+    pub size: u32,
+    pub modules: Vec<bool>,
+}
+
+/// The text put into a QR code to share an identifier: `szept:<identifier>`.
+///
+/// The prefix lets a scanner tell a Szept code from any other, and every
+/// place that accepts an identifier also accepts it with the prefix.
+#[uniffi::export]
+pub fn share_link(id: String) -> String {
+    format!("{ID_PREFIX}{}", id.trim())
+}
+
+/// Encodes `text` as a QR code with medium error correction.
+#[uniffi::export]
+pub fn qr_code(text: String) -> Result<QrCode> {
+    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M)
+        .map_err(|err| anyhow!("cannot make a QR code: {err}"))?;
+    let size = code.width();
+    let modules = code
+        .to_colors()
+        .into_iter()
+        .map(|color| color == qrcode::Color::Dark)
+        .collect();
+    Ok(QrCode {
+        size: u32::try_from(size).context("QR code too large")?,
+        modules,
+    })
+}
+
+/// Turns a scanned or pasted identifier into its canonical form.
+///
+/// Accepts the bare identifier and the `szept:` link, ignoring whitespace.
+#[uniffi::export]
+pub fn normalize_id(text: String) -> Result<String> {
+    Ok(parse_id(&text)?.to_string())
 }
 
 /// Receives events. Called on a background thread.
@@ -303,8 +350,15 @@ impl App {
     }
 }
 
+/// Prefix of the identifier links put into QR codes.
+const ID_PREFIX: &str = "szept:";
+
 fn parse_id(text: &str) -> anyhow::Result<EndpointId> {
     let text = text.trim();
+    let text = match text.get(..ID_PREFIX.len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case(ID_PREFIX) => text[ID_PREFIX.len()..].trim(),
+        _ => text,
+    };
     if text.is_empty() {
         bail!("the identifier is empty");
     }
