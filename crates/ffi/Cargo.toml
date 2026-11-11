@@ -1,0 +1,33 @@
+[package]
+name = "komunikator-ffi"
+description = "Most między rdzeniem w Ruście a aplikacjami graficznymi (Kotlin)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+# Enables the binding generator. Not needed inside the application.
+cli = ["uniffi/cli"]
+
+[dependencies]
+anyhow.workspace = true
+komunikator-core = { path = "../core" }
+thiserror = "2"
+tokio.workspace = true
+uniffi = "0.32"
+
+[dev-dependencies]
+rand.workspace = true
+
+# The generated FFI glue needs `unsafe`, so this crate cannot inherit the
+# workspace-wide ban. Hand-written code here stays free of it.
