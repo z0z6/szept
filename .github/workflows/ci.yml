@@ -37,6 +37,11 @@ jobs:
             target
           key: lint-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: lint-${{ runner.os }}-
+      - name: Biblioteki systemowe (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -69,6 +74,11 @@ jobs:
             target
           key: build-${{ matrix.name }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: build-${{ matrix.name }}-
+      - name: Biblioteki systemowe (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev
       - name: Testy
         run: cargo test --workspace --locked
       - name: Build release
@@ -119,10 +129,73 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  desktop:
+    name: Desktop (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported runner: the AppImage and the .deb then run on
+          # distributions with glibc 2.35 and newer.
+          - { name: linux-x86_64, os: ubuntu-22.04, bundles: "appimage,deb" }
+          - { name: windows-x86_64, os: windows-latest, bundles: nsis }
+          - { name: macos-arm64, os: macos-latest, bundles: dmg }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup toolchain install || rustup show
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: desktop-${{ matrix.name }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: desktop-${{ matrix.name }}-
+      - name: Biblioteki systemowe (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # GStreamer goes into the AppImage so the QR scanner can use the camera.
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev \
+            librsvg2-dev patchelf file gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+      # The Tauri CLI comes pinned, with checksums, from package-lock.json.
+      - name: Tauri CLI
+        working-directory: crates/desktop
+        run: npm ci --no-audit --no-fund
+      - name: Build
+        working-directory: crates/desktop
+        run: npx tauri build --ci --bundles "${{ matrix.bundles }}" -- --locked
+      - name: Paczka
+        run: |
+          mkdir dist
+          bundle=target/release/bundle
+          case "${{ matrix.name }}" in
+            linux-*)
+              cp "$bundle"/appimage/*.AppImage "dist/szept-desktop-${{ matrix.name }}.AppImage"
+              cp "$bundle"/deb/*.deb "dist/szept-desktop-${{ matrix.name }}.deb" ;;
+            windows-*)
+              cp "$bundle"/nsis/*-setup.exe "dist/szept-desktop-${{ matrix.name }}-setup.exe" ;;
+            macos-*)
+              cp "$bundle"/dmg/*.dmg "dist/szept-desktop-${{ matrix.name }}.dmg" ;;
+          esac
+          ls -la dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: szept-desktop-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Release
     if: github.ref_type == 'tag'
-    needs: [lint, build, android]
+    needs: [lint, build, android, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
