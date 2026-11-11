@@ -24,7 +24,7 @@ const RETRY_EVERY: Duration = Duration::from_secs(5);
 const ONLINE_LIMIT: Duration = Duration::from_secs(10);
 
 #[derive(Parser)]
-#[command(name = "komunikator", version, about = "Szyfrowany komunikator P2P")]
+#[command(name = "szept", version, about = "Szyfrowany komunikator P2P")]
 struct Cli {
     /// Katalog z kluczem i kontaktami (domyślnie: katalog danych użytkownika)
     #[arg(long, global = true, env = "KOMUNIKATOR_HOME", value_name = "KATALOG")]
@@ -128,7 +128,7 @@ async fn run(cli: Cli) -> Result<()> {
 
 fn load_identity(path: &Path) -> Result<Identity> {
     if !Identity::exists(path) {
-        bail!("brak tożsamości, uruchom najpierw `komunikator init`");
+        bail!("brak tożsamości, uruchom najpierw `szept init`");
     }
     Identity::load(path)
 }

@@ -1,6 +1,6 @@
-# Komunikator
+# Szept
 
-Szyfrowany komunikator tekstowy P2P: bez kont, bez numeru telefonu i bez serwera przechowującego wiadomości. Nazwa jest robocza.
+Szyfrowany komunikator tekstowy P2P: bez kont, bez numeru telefonu i bez serwera przechowującego wiadomości.
 
 **Stan: kamień milowy 1 plus wczesna aplikacja na Androida.** Działa rdzeń, klient terminalowy i prosta aplikacja do rozmów 1:1. To wersja deweloperska, jeszcze nie do poufnej komunikacji (patrz „Bezpieczeństwo”).
 
@@ -9,9 +9,9 @@ Szyfrowany komunikator tekstowy P2P: bez kont, bez numeru telefonu i bez serwera
 Na obu komputerach:
 
 ```
-komunikator init                  # tworzy tożsamość i wypisuje identyfikator
-komunikator add ola <ID_OLI>      # identyfikator przekaż zaufanym kanałem
-komunikator chat ola
+szept init                  # tworzy tożsamość i wypisuje identyfikator
+szept add ola <ID_OLI>      # identyfikator przekaż zaufanym kanałem
+szept chat ola
 ```
 
 Wiadomość napisana, gdy kontakt jest offline, czeka w kolejce i wychodzi po jego powrocie. Kolejka żyje na razie tylko do zamknięcia programu.
@@ -19,8 +19,8 @@ Wiadomość napisana, gdy kontakt jest offline, czeka w kolejce i wychodzi po je
 ### Tryb lokalny, bez żadnych zewnętrznych serwerów
 
 ```
-komunikator chat ola --local                           # wypisze adresy IP:PORT
-komunikator chat ala --local --direct 192.168.1.20:PORT
+szept chat ola --local                           # wypisze adresy IP:PORT
+szept chat ala --local --direct 192.168.1.20:PORT
 ```
 
 Opcję `--direct` podaje jedna strona. Druga czeka na połączenie.
@@ -68,7 +68,7 @@ Wymagany Rust z `rust-toolchain.toml` (rustup pobierze go sam).
 
 ```
 cargo test --workspace
-cargo build --release -p komunikator-cli    # target/release/komunikator
+cargo build --release -p komunikator-cli    # target/release/szept
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) przy każdym pushu sprawdza format, clippy i testy oraz buduje binaria dla Linuksa, Windows i macOS i APK dla Androida. Tag `v*` publikuje je jako release z sumami SHA-256. Akcje są przypięte do konkretnych commitów, a Dependabot zgłasza ich aktualizacje.

@@ -118,7 +118,7 @@ private fun ContactsScreen(
     var removing by remember { mutableStateOf<Contact?>(null) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Komunikator") }) },
+        topBar = { TopAppBar(title = { Text("Szept") }) },
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = { adding = true }) { Text("Dodaj kontakt") }
         },

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "komunikator"
+rootProject.name = "szept"
 include(":app")

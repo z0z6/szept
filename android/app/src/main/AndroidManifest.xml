@@ -7,7 +7,9 @@
     <!-- allowBackup is off so the identity key never lands in a cloud backup. -->
     <application
         android:allowBackup="false"
-        android:label="Komunikator"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Szept"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity

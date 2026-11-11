@@ -137,7 +137,7 @@ impl App {
         let contacts = Contacts::load(&contacts::default_path(&data_dir))?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
-            .thread_name("komunikator")
+            .thread_name("szept")
             .enable_all()
             .build()
             .context("cannot start the async runtime")?;
