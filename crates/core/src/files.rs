@@ -169,6 +169,17 @@ pub fn kind(name: &str) -> &'static str {
     }
 }
 
+/// Returns `true` if `bytes` start like a JPEG, PNG, WebP or GIF picture.
+///
+/// Only checks the signature: the platform's image decoder does the rest.
+pub fn is_picture(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP")
+}
+
 /// Formats a hash the way people compare them: lowercase hex.
 pub fn hash_hex(hash: &[u8; 32]) -> String {
     blake3::Hash::from_bytes(*hash).to_hex().to_string()
@@ -234,6 +245,16 @@ mod tests {
         assert_eq!(kind("mix.flac"), "audio");
         assert_eq!(kind("foto.HEIC"), "image");
         assert_eq!(kind("README"), "other");
+    }
+
+    #[test]
+    fn pictures_are_told_by_their_signature() {
+        assert!(is_picture(b"\xff\xd8\xff\xdb"));
+        assert!(is_picture(b"GIF89a...."));
+        assert!(is_picture(b"RIFF\0\0\0\0WEBPVP8 "));
+        assert!(!is_picture(b"RIFF\0\0\0\0WAVE"));
+        assert!(!is_picture(b"<svg/>"));
+        assert!(!is_picture(b""));
     }
 
     #[test]

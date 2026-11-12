@@ -14,4 +14,4 @@ pub use contacts::Contacts;
 pub use identity::Identity;
 pub use iroh::{EndpointAddr, EndpointId};
 pub use node::{Event, Network, Node};
-pub use protocol::{Content, FileOffer, MessageId, Outgoing};
+pub use protocol::{Content, FileOffer, Media, MessageId, Outgoing};

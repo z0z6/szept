@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -54,10 +55,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,27 +68,33 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import androidx.emoji2.emojipicker.EmojiPickerView
+import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
+import kotlinx.coroutines.delay
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import java.text.DateFormat
@@ -98,6 +105,7 @@ import uniffi.komunikator_ffi.shareLink
 
 class MainActivity : ComponentActivity() {
     private val model: Messenger by lazy { (application as SzeptApp).messenger }
+    private val appearance: Appearance by lazy { (application as SzeptApp).appearance }
 
     // Without the permission Android 13+ hides every notification.
     private val askNotifications =
@@ -113,10 +121,23 @@ class MainActivity : ComponentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+            val dark = appearance.isDark(isSystemInDarkTheme())
+            val colors = colorSchemeOf(appearance.theme, dark)
+            val view = LocalView.current
+            SideEffect {
+                // The system bars take the colours of the theme.
+                @Suppress("DEPRECATION")
+                window.statusBarColor = colors.surface.toArgb()
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = colors.surface.toArgb()
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
             MaterialTheme(colorScheme = colors) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    Root(model, onRestart = { SzeptService.start(this) })
+                    Root(model, appearance, dark, onRestart = { SzeptService.start(this) })
                 }
             }
         }
@@ -134,6 +155,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         model.setForeground(false)
+        VoicePlayback.stop()
         super.onStop()
     }
 
@@ -146,7 +168,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Root(model: Messenger, onRestart: () -> Unit) {
+private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRestart: () -> Unit) {
     val state by model.state.collectAsState()
     val open = state.contacts.firstOrNull { it.id == state.openId }
 
@@ -170,14 +192,16 @@ private fun Root(model: Messenger, onRestart: () -> Unit) {
         open != null -> ChatScreen(
             contact = open,
             online = open.id in state.online,
+            picture = state.avatars[open.id],
             messages = state.messages[open.id].orEmpty(),
-            onSend = { model.send(open.id, it) },
-            onSendFiles = { model.sendFiles(open.id, it) },
-            onDownload = { model.download(open.id, it) },
+            model = model,
             onBack = { model.open(null) },
         )
         else -> ContactsScreen(
             state = state,
+            appearance = appearance,
+            dark = dark,
+            model = model,
             onOpen = { model.open(it.id) },
             onAdd = model::addContact,
             onRemove = model::removeContact,
@@ -203,6 +227,10 @@ private fun friendly(message: String): String = when {
     "your own identifier" in message -> "To Twój własny identyfikator."
     "not a valid identifier" in message || "identifier is empty" in message ->
         "To nie jest identyfikator Szeptu."
+    "picture is too large" in message -> "To zdjęcie jest za duże."
+    "JPEG, PNG, WebP or GIF" in message -> "Wybierz zdjęcie w formacie JPEG, PNG, WebP albo GIF."
+    "media file is too large" in message -> "Ten plik jest za duży na wiadomość. Wyślij go spinaczem."
+    "cannot be sent as media" in message -> "Tego pliku nie da się wysłać jako GIF."
     "too long" in message -> "Wiadomość jest za długa."
     else -> message
 }
@@ -211,6 +239,9 @@ private fun friendly(message: String): String = when {
 @Composable
 private fun ContactsScreen(
     state: UiState,
+    appearance: Appearance,
+    dark: Boolean,
+    model: Messenger,
     onOpen: (Contact) -> Unit,
     onAdd: (String, String) -> Unit,
     onRemove: (Contact) -> Unit,
@@ -218,9 +249,20 @@ private fun ContactsScreen(
 ) {
     var adding by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Contact?>(null) }
+    var settings by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Szept") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Szept") },
+                actions = {
+                    IconButton(
+                        onClick = { settings = true },
+                        modifier = Modifier.semantics { contentDescription = "Ustawienia: Twoje zdjęcie i wygląd" },
+                    ) { Avatar(alias = "", online = false, picture = state.myAvatar, size = 36) }
+                },
+            )
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = { adding = true }) { Text("Dodaj kontakt") }
         },
@@ -244,7 +286,7 @@ private fun ContactsScreen(
                 val last = state.messages[contact.id]?.lastOrNull()
                 ListItem(
                     modifier = Modifier.clickable { onOpen(contact) },
-                    leadingContent = { Avatar(contact.alias, online) },
+                    leadingContent = { Avatar(contact.alias, online, state.avatars[contact.id]) },
                     headlineContent = {
                         Text(contact.alias, fontWeight = if (unread > 0) FontWeight.Bold else null)
                     },
@@ -252,7 +294,13 @@ private fun ContactsScreen(
                         val preview = when {
                             last == null -> if (online) "Połączony" else "Niepołączony"
                             else -> {
-                                val text = last.file?.let { "📎 ${it.name}" } ?: last.body
+                                val file = last.file
+                                val text = when {
+                                    file == null -> last.body
+                                    file.media == "voice" -> "🎤 Wiadomość głosowa"
+                                    file.media == "gif" -> "GIF"
+                                    else -> "📎 ${file.name}"
+                                }
                                 if (last.mine) "Ty: $text" else text
                             }
                         }
@@ -272,6 +320,17 @@ private fun ContactsScreen(
             // Room for the floating button.
             item { Spacer(Modifier.height(88.dp)) }
         }
+    }
+
+    if (settings) {
+        SettingsDialog(
+            appearance = appearance,
+            dark = dark,
+            myAvatar = state.myAvatar,
+            onPickAvatar = model::setAvatar,
+            onRemoveAvatar = model::removeAvatar,
+            onDismiss = { settings = false },
+        )
     }
 
     if (adding) {
@@ -301,30 +360,55 @@ private fun ContactsScreen(
     }
 }
 
+/**
+ * A contact's picture, or the first letter of their name when there is none.
+ * Without a name (our own avatar), a person outline.
+ */
 @Composable
-private fun Avatar(alias: String, online: Boolean) {
+fun Avatar(alias: String, online: Boolean, picture: ImageBitmap? = null, size: Int = 40) {
     val colors = MaterialTheme.colorScheme
-    Box(modifier = Modifier.size(40.dp)) {
+    Box(modifier = Modifier.size(size.dp)) {
         Box(
             modifier = Modifier.fillMaxSize().clip(CircleShape).background(colors.secondaryContainer),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                alias.take(1).uppercase(),
-                color = colors.onSecondaryContainer,
-                fontWeight = FontWeight.SemiBold,
-            )
+            when {
+                picture != null -> Image(
+                    bitmap = picture,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                alias.isNotEmpty() -> Text(
+                    alias.take(1).uppercase(),
+                    color = colors.onSecondaryContainer,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = (size * 0.4f).sp,
+                )
+                else -> Canvas(modifier = Modifier.fillMaxSize(0.62f)) {
+                    val c = this.size.minDimension
+                    drawCircle(colors.primary, radius = c * 0.2f, center = Offset(c / 2, c * 0.33f))
+                    drawArc(
+                        color = colors.primary,
+                        startAngle = 180f,
+                        sweepAngle = 180f,
+                        useCenter = true,
+                        topLeft = Offset(c * 0.15f, c * 0.62f),
+                        size = Size(c * 0.7f, c * 0.7f),
+                    )
+                }
+            }
         }
         if (online) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .size(12.dp)
+                    .size((size * 0.3f).dp)
                     .clip(CircleShape)
                     .background(colors.surface)
                     .padding(2.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF2E7D6B))
+                    .background(colors.tertiary)
                     .semantics { contentDescription = "online" },
             )
         }
@@ -542,32 +626,76 @@ private fun AddContactDialog(
 private fun ChatScreen(
     contact: Contact,
     online: Boolean,
+    picture: ImageBitmap?,
     messages: List<Message>,
-    onSend: (String) -> Unit,
-    onSendFiles: (List<Uri>) -> Unit,
-    onDownload: (String) -> Unit,
+    model: Messenger,
     onBack: () -> Unit,
 ) {
-    var draft by remember(contact.id) { mutableStateOf(TextFieldValue("")) }
+    val context = LocalContext.current
+    var draft by remember(contact.id) { mutableStateOf("") }
+    var editor by remember(contact.id) { mutableStateOf<RichEditText?>(null) }
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) onSendFiles(uris)
+        if (uris.isNotEmpty()) model.sendFiles(contact.id, uris)
     }
     var picking by remember(contact.id) { mutableStateOf(false) }
-    val keyboard = LocalSoftwareKeyboardController.current
+    val input = remember { context.getSystemService(InputMethodManager::class.java) }
     val listState = rememberLazyListState()
     val lastMine = messages.indexOfLast { it.mine }
+
+    // Voice messages
+    val recorder = remember { VoiceRecorder(context) }
+    var recording by remember { mutableStateOf(false) }
+    var elapsed by remember { mutableStateOf(0L) }
+    fun startRecording() {
+        try {
+            recorder.start(model.newRecording())
+            recording = true
+            picking = false
+            editor?.let { input.hideSoftInputFromWindow(it.windowToken, 0) }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Nie udało się włączyć mikrofonu.", Toast.LENGTH_LONG).show()
+        }
+    }
+    fun finishRecording(send: Boolean) {
+        recording = false
+        if (send) {
+            recorder.finish()?.let { (file, length) -> model.sendVoice(contact.id, file, length) }
+        } else {
+            recorder.cancel()
+        }
+    }
+    val askMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            startRecording()
+        } else {
+            Toast.makeText(context, "Bez dostępu do mikrofonu nie nagrasz wiadomości.", Toast.LENGTH_LONG).show()
+        }
+    }
+    LaunchedEffect(recording) {
+        while (recording) {
+            elapsed = recorder.elapsed()
+            if (elapsed >= MAX_VOICE_MS) finishRecording(true)
+            delay(200)
+        }
+    }
+    // Leaving the conversation drops an unfinished recording.
+    DisposableEffect(contact.id) {
+        onDispose { recorder.cancel() }
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
-    BackHandler(enabled = picking) { picking = false }
+    BackHandler(enabled = picking || recording) {
+        if (recording) finishRecording(false) else picking = false
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(contact.alias, online)
+                        Avatar(contact.alias, online, picture)
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(contact.alias)
@@ -583,49 +711,93 @@ private fun ChatScreen(
         },
         bottomBar = {
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    IconButton(
-                        onClick = {
-                            picking = !picking
-                            if (picking) keyboard?.hide() else keyboard?.show()
-                        },
-                        modifier = Modifier.semantics { contentDescription = "Emoji" },
-                    ) { Text("😊", fontSize = 22.sp) }
-                    IconButton(
-                        onClick = { pickFiles.launch(arrayOf("*/*")) },
-                        modifier = Modifier.semantics { contentDescription = "Wyślij pliki" },
-                    ) { Text("📎", fontSize = 22.sp) }
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Wiadomość") },
-                        maxLines = 4,
-                    )
-                    Button(
-                        onClick = {
-                            onSend(draft.text.trim())
-                            draft = TextFieldValue("")
-                        },
-                        enabled = draft.text.isNotBlank(),
-                    ) { Text("Wyślij") }
+                if (recording) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.error),
+                        )
+                        Text(formatDuration(elapsed), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Nagrywanie…",
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = { finishRecording(false) }) { Text("Anuluj") }
+                        Button(onClick = { finishRecording(true) }) { Text("Wyślij") }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        IconButton(
+                            onClick = {
+                                picking = !picking
+                                editor?.let { field ->
+                                    if (picking) {
+                                        input.hideSoftInputFromWindow(field.windowToken, 0)
+                                    } else {
+                                        field.requestFocus()
+                                        input.showSoftInput(field, 0)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Emoji" },
+                        ) { Text("😊", fontSize = 22.sp) }
+                        IconButton(
+                            onClick = { pickFiles.launch(arrayOf("*/*")) },
+                            modifier = Modifier.semantics { contentDescription = "Wyślij pliki" },
+                        ) { Text("📎", fontSize = 22.sp) }
+                        MessageField(
+                            onTextChange = { draft = it },
+                            onPicture = { uri, mime ->
+                                // Copied now: the keyboard's permission to read it is short-lived.
+                                val staged = model.stageGif(uri, mime)
+                                if (staged != null) {
+                                    model.sendGif(contact.id, staged)
+                                } else {
+                                    Toast.makeText(context, "Tego obrazu nie da się wysłać.", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            onCreated = { editor = it },
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (draft.isBlank()) {
+                            IconButton(
+                                onClick = {
+                                    val granted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                                        PackageManager.PERMISSION_GRANTED
+                                    if (granted) startRecording() else askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                                },
+                                modifier = Modifier.semantics { contentDescription = "Nagraj wiadomość głosową" },
+                            ) { MicIcon() }
+                        } else {
+                            Button(onClick = {
+                                model.send(contact.id, draft.trim())
+                                editor?.setText("")
+                            }) { Text("Wyślij") }
+                        }
+                    }
                 }
-                if (picking) {
+                if (picking && !recording) {
                     // The system's emoji set, with skin tones and recents.
                     AndroidView(
                         factory = { context ->
                             EmojiPickerView(context).apply {
                                 setOnEmojiPickedListener { item ->
-                                    val text = draft.text
-                                    val start = draft.selection.min
-                                    val end = draft.selection.max
-                                    val updated = text.substring(0, start) + item.emoji + text.substring(end)
-                                    val cursor = start + item.emoji.length
-                                    draft = TextFieldValue(updated, TextRange(cursor))
+                                    editor?.let { field ->
+                                        val start = field.selectionStart.coerceAtLeast(0)
+                                        val end = field.selectionEnd.coerceAtLeast(0)
+                                        field.text.replace(minOf(start, end), maxOf(start, end), item.emoji)
+                                    }
                                 }
                             }
                         },
@@ -643,7 +815,8 @@ private fun ChatScreen(
             if (messages.isEmpty()) {
                 item {
                     Text(
-                        "Napisz pierwszą wiadomość albo wyślij plik spinaczem. Rozmowa trwa, dopóki Szept jest otwarty.",
+                        "Napisz pierwszą wiadomość, nagraj głosówkę albo wyślij plik spinaczem. " +
+                            "GIF-y wstawisz z klawiatury. Rozmowa trwa, dopóki Szept jest otwarty.",
                         modifier = Modifier.padding(24.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -652,10 +825,44 @@ private fun ChatScreen(
             items(messages.size, key = { messages[it].id }) { index ->
                 val message = messages[index]
                 Bubble(message, showWord = index == lastMine) {
-                    FileCard(message.file!!, message.mine, contact.alias) { onDownload(message.id) }
+                    val file = message.file!!
+                    if (file.media != null) {
+                        MediaContent(file) { model.download(contact.id, message.id) }
+                    } else {
+                        FileCard(file, message.mine, contact.alias) { model.download(contact.id, message.id) }
+                    }
                 }
             }
         }
+    }
+}
+
+/** The longest voice message, matching the desktop app. */
+private const val MAX_VOICE_MS = 10 * 60 * 1000L
+
+@Composable
+private fun MicIcon() {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(modifier = Modifier.size(24.dp)) {
+        val u = size.minDimension / 24f
+        val stroke = Stroke(width = 1.8f * u, cap = StrokeCap.Round)
+        drawRoundRect(
+            color,
+            topLeft = Offset(9f * u, 3f * u),
+            size = Size(6f * u, 11f * u),
+            cornerRadius = CornerRadius(3f * u),
+            style = stroke,
+        )
+        drawArc(
+            color,
+            startAngle = 0f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(5.5f * u, 4.5f * u),
+            size = Size(13f * u, 13f * u),
+            style = stroke,
+        )
+        drawLine(color, Offset(12f * u, 17.5f * u), Offset(12f * u, 21f * u), strokeWidth = 1.8f * u, cap = StrokeCap.Round)
     }
 }
 
@@ -669,7 +876,7 @@ private fun Bubble(message: Message, showWord: Boolean, fileContent: @Composable
         contentAlignment = if (message.mine) Alignment.CenterEnd else Alignment.CenterStart,
     ) {
         Surface(
-            color = if (message.mine) colors.primaryContainer else colors.surfaceVariant,
+            color = if (message.mine) colors.primaryContainer else colors.surfaceContainerHighest,
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.widthIn(max = 300.dp),
         ) {
@@ -706,7 +913,7 @@ private fun statusLabel(status: Status) = when (status) {
 /** A clock, one tick or two ticks: queued, sent, delivered. */
 @Composable
 private fun StatusMark(status: Status, label: String) {
-    val color = if (status == Status.DELIVERED) Color(0xFF2E7D6B) else MaterialTheme.colorScheme.onSurfaceVariant
+    val color = if (status == Status.DELIVERED) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
     Canvas(modifier = Modifier.size(width = 16.dp, height = 12.dp).semantics { contentDescription = label }) {
         val unit = size.width / 16f
         val stroke = Stroke(width = 1.5f * unit, cap = StrokeCap.Round, join = StrokeJoin.Round)

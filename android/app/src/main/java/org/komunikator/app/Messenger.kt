@@ -1,8 +1,15 @@
 package org.komunikator.app
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +23,10 @@ import uniffi.komunikator_ffi.App
 import uniffi.komunikator_ffi.ChatEvent
 import uniffi.komunikator_ffi.Contact
 import uniffi.komunikator_ffi.EventListener
+import uniffi.komunikator_ffi.Media
 import uniffi.komunikator_ffi.fileKind
+import uniffi.komunikator_ffi.maxAvatarLen
+import uniffi.komunikator_ffi.maxMediaSize
 import uniffi.komunikator_ffi.normalizeId
 
 /** Where a message is on its way. */
@@ -57,6 +67,10 @@ data class FileItem(
     /** Where the file is on this phone: ours from the start, theirs once saved. */
     val path: String? = null,
     val reason: String? = null,
+    /** "voice" or "gif" for media the core fetches on its own, else null. */
+    val media: String? = null,
+    /** Length of a voice message. */
+    val durationMs: Long = 0,
 )
 
 /** One line of a conversation: text, or a file when [file] is set. */
@@ -84,6 +98,10 @@ data class UiState(
     val error: String? = null,
     /** The person switched Szept off from its notification. */
     val stopped: Boolean = false,
+    /** Contacts' profile pictures, keyed by identifier. */
+    val avatars: Map<String, ImageBitmap> = emptyMap(),
+    /** Our own profile picture. */
+    val myAvatar: ImageBitmap? = null,
 )
 
 /**
@@ -130,8 +148,19 @@ class Messenger(private val application: Application) : EventListener {
                     val app = App(application.filesDir.absolutePath, false)
                     app.start(this@Messenger)
                     core = app
+                    val contacts = app.contacts()
+                    val avatars = contacts.mapNotNull { contact ->
+                        app.avatar(contact.id)?.let(::decodePicture)?.let { contact.id to it }
+                    }.toMap()
                     _state.update {
-                        it.copy(ready = true, stopped = false, myId = app.myId(), contacts = app.contacts())
+                        it.copy(
+                            ready = true,
+                            stopped = false,
+                            myId = app.myId(),
+                            contacts = contacts,
+                            avatars = avatars,
+                            myAvatar = app.myAvatar()?.let(::decodePicture),
+                        )
                     }
                 } catch (e: Exception) {
                     fail(e)
@@ -170,23 +199,41 @@ class Messenger(private val application: Application) : EventListener {
                 event.peer,
                 Message(event.id, false, event.body, event.sentAtMs.toLong(), Status.RECEIVED),
             )
-            is ChatEvent.FileOffered -> receive(
-                event.peer,
-                Message(
-                    event.id,
-                    false,
-                    "",
-                    event.sentAtMs.toLong(),
-                    Status.RECEIVED,
-                    FileItem(
-                        name = event.name,
-                        size = event.size.toLong(),
-                        hash = event.hash,
-                        kind = fileKind(event.name),
-                        transfer = Transfer.OFFERED,
+            is ChatEvent.FileOffered -> {
+                val (media, duration) = describe(event.media)
+                receive(
+                    event.peer,
+                    Message(
+                        event.id,
+                        false,
+                        "",
+                        event.sentAtMs.toLong(),
+                        Status.RECEIVED,
+                        FileItem(
+                            name = event.name,
+                            size = event.size.toLong(),
+                            hash = event.hash,
+                            kind = fileKind(event.name),
+                            // Media are fetched by the core right away.
+                            transfer = if (media != null) Transfer.DOWNLOADING else Transfer.OFFERED,
+                            media = media,
+                            durationMs = duration,
+                        ),
                     ),
-                ),
-            )
+                )
+            }
+            is ChatEvent.AvatarChanged -> {
+                val picture = core?.avatar(event.peer)?.let(::decodePicture)
+                _state.update {
+                    it.copy(
+                        avatars = if (picture != null) {
+                            it.avatars + (event.peer to picture)
+                        } else {
+                            it.avatars - event.peer
+                        },
+                    )
+                }
+            }
             is ChatEvent.FileProgress -> updateFile(event.peer, event.id) {
                 it.copy(transfer = Transfer.DOWNLOADING, done = event.done.toLong())
             }
@@ -229,6 +276,7 @@ class Messenger(private val application: Application) : EventListener {
                 online = it.online - contact.id,
                 messages = it.messages - contact.id,
                 unread = it.unread - contact.id,
+                avatars = it.avatars - contact.id,
                 openId = if (it.openId == contact.id) null else it.openId,
             )
         }
@@ -283,9 +331,156 @@ class Messenger(private val application: Application) : EventListener {
         }
     }
 
+    /** A fresh file for a voice recording. Recordings go when the process ends, like other offers. */
+    fun newRecording(): File {
+        val dir = File(outgoingDir, System.nanoTime().toString()).apply { mkdirs() }
+        return File(dir, "glosowa-${System.currentTimeMillis()}.m4a")
+    }
+
+    /** Sends a finished recording. */
+    fun sendVoice(peer: String, file: File, durationMs: Long) = withCore { app ->
+        val media = Media.Voice(durationMs.coerceIn(0, UInt.MAX_VALUE.toLong()).toUInt())
+        offerMedia(app, peer, file, media)
+    }
+
+    /**
+     * Copies a GIF or sticker the keyboard handed over into the app's own
+     * storage. Call it at once, on the thread that received it: the
+     * keyboard's permission to read it may end as soon as that call returns.
+     * Returns null for something too big or unreadable.
+     */
+    fun stageGif(uri: Uri, mime: String?): File? = try {
+        val extension = when (mime ?: application.contentResolver.getType(uri)) {
+            "image/gif" -> "gif"
+            "image/webp" -> "webp"
+            "image/png" -> "png"
+            "image/jpeg", "image/jpg" -> "jpg"
+            else -> null
+        }
+        if (extension == null) {
+            null
+        } else {
+            val dir = File(outgoingDir, System.nanoTime().toString()).apply { mkdirs() }
+            val copy = File(dir, "gif-${System.currentTimeMillis()}.$extension")
+            val limit = maxMediaSize().toLong()
+            val input = application.contentResolver.openInputStream(uri)
+            val copied = input?.use { source ->
+                copy.outputStream().use { sink ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > limit) return@use false
+                        sink.write(buffer, 0, read)
+                    }
+                    true
+                }
+            } ?: false
+            if (copied) copy else null.also { copy.delete() }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Sends a GIF copied by [stageGif]. */
+    fun sendGif(peer: String, file: File) = withCore { app -> offerMedia(app, peer, file, Media.Gif) }
+
+    private fun offerMedia(app: App, peer: String, file: File, media: Media) {
+        val sent = app.sendMedia(peer, file.absolutePath, media)
+        val (kind, duration) = describe(media)
+        synchronized(sendLock) {
+            append(
+                peer,
+                Message(
+                    sent.id,
+                    true,
+                    "",
+                    System.currentTimeMillis(),
+                    Status.QUEUED,
+                    FileItem(
+                        name = sent.name,
+                        size = sent.size.toLong(),
+                        hash = sent.hash,
+                        kind = fileKind(sent.name),
+                        transfer = Transfer.SHARED,
+                        done = sent.size.toLong(),
+                        path = file.absolutePath,
+                        media = kind,
+                        durationMs = duration,
+                    ),
+                ),
+            )
+            early.remove(sent.id)?.let { setStatus(peer, sent.id, it) }
+        }
+    }
+
+    /**
+     * Sets our profile picture from one the person picked: cut to a square
+     * in the middle and scaled down until it fits in a single message.
+     */
+    fun setAvatar(uri: Uri) = withCore { app ->
+        val picture = loadSquare(uri, 256) ?: error("Nie udało się otworzyć tego zdjęcia.")
+        val limit = maxAvatarLen().toLong()
+        var bytes = ByteArray(0)
+        for ((size, quality) in listOf(256 to 86, 256 to 72, 192 to 70, 128 to 65)) {
+            val scaled = if (size == picture.width) picture else Bitmap.createScaledBitmap(picture, size, size, true)
+            bytes = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, quality, it) }
+                .toByteArray()
+            if (bytes.size <= limit) break
+        }
+        app.setAvatar(bytes)
+        _state.update { it.copy(myAvatar = decodePicture(bytes)) }
+    }
+
+    fun removeAvatar() = withCore { app ->
+        app.setAvatar(ByteArray(0))
+        _state.update { it.copy(myAvatar = null) }
+    }
+
+    /** Opens a picture the right way up, cut to a `side` × `side` square. */
+    private fun loadSquare(uri: Uri, side: Int): Bitmap? {
+        val full = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // Follows the photo's orientation and decodes it already smaller.
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(application.contentResolver, uri)) { decoder, info, _ ->
+                val shorter = minOf(info.size.width, info.size.height)
+                if (shorter > side * 2) {
+                    val ratio = side * 2f / shorter
+                    decoder.setTargetSize((info.size.width * ratio).toInt(), (info.size.height * ratio).toInt())
+                }
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        } else {
+            val resolver = application.contentResolver
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= side * 2) sample *= 2
+            val options = BitmapFactory.Options().apply { inSampleSize = sample }
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+        } ?: return null
+        val shorter = minOf(full.width, full.height)
+        val square = Bitmap.createBitmap(full, (full.width - shorter) / 2, (full.height - shorter) / 2, shorter, shorter)
+        // JPEG has no transparency: put transparent pictures on white.
+        val result = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(result).apply {
+            drawColor(android.graphics.Color.WHITE)
+            drawBitmap(
+                square,
+                null,
+                android.graphics.Rect(0, 0, side, side),
+                android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG),
+            )
+        }
+        return result
+    }
+
     /** Starts or resumes fetching a file the contact offered. */
     fun download(peer: String, id: String) = withCore { app ->
-        app.download(id, incomingDir.absolutePath)
+        val media = _state.value.messages[peer]?.firstOrNull { it.id == id }?.file?.media
+        // Voice messages and GIFs live with the core's own media.
+        app.download(id, if (media != null) app.mediaDir() else incomingDir.absolutePath)
         updateFile(peer, id) { it.copy(transfer = Transfer.DOWNLOADING, reason = null) }
     }
 
@@ -297,6 +492,15 @@ class Messenger(private val application: Application) : EventListener {
     }
 
     fun clearError() = _state.update { it.copy(error = null) }
+
+    private fun decodePicture(bytes: ByteArray): ImageBitmap? =
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+
+    private fun describe(media: Media?): Pair<String?, Long> = when (media) {
+        is Media.Voice -> "voice" to media.durationMs.toLong()
+        is Media.Gif -> "gif" to 0L
+        null -> null to 0L
+    }
 
     private fun updateFile(peer: String, id: String, change: (FileItem) -> FileItem) = _state.update { state ->
         val conversation = state.messages[peer] ?: return@update state

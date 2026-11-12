@@ -9,13 +9,18 @@ mod store;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use komunikator_ffi::{App, AppError, ChatEvent, EventListener, file_kind, qr_code, share_link};
+use base64::Engine as _;
+use komunikator_ffi::{
+    App, AppError, ChatEvent, EventListener, Media, file_kind, max_media_size, qr_code, share_link,
+};
 use serde::Serialize;
 use tauri::{
     AppHandle, DragDropEvent, Emitter, Manager, RunEvent, State, UserAttentionType, WebviewUrl,
     WebviewWindowBuilder, WindowEvent,
+    ipc::{InvokeBody, Request},
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
@@ -27,6 +32,9 @@ use crate::store::{FileInfo, Message, Status, Store, Transfer};
 struct Shared {
     core: Arc<App>,
     store: Mutex<Store>,
+    /// Voice messages and pasted GIFs we send wait here until the app
+    /// closes: the contact fetches them from this folder.
+    outgoing: PathBuf,
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -42,6 +50,8 @@ struct ContactView {
     online: bool,
     unread: u32,
     last: Option<String>,
+    /// The contact's profile picture as a `data:` URL.
+    avatar: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -49,6 +59,8 @@ struct Overview {
     my_id: String,
     link: String,
     qr_svg: String,
+    /// Our own profile picture as a `data:` URL.
+    my_avatar: Option<String>,
     contacts: Vec<ContactView>,
 }
 
@@ -57,6 +69,7 @@ struct ChatView {
     alias: String,
     id: String,
     online: bool,
+    avatar: Option<String>,
     messages: Vec<Message>,
 }
 
@@ -90,6 +103,7 @@ fn overview(shared: State<'_, Shared>) -> CommandResult<Overview> {
             online: shared.core.is_online(contact.id.clone()),
             unread: store.unread(&contact.id),
             last: store.last_body(&contact.id),
+            avatar: data_url(shared.core.avatar(contact.id.clone())),
             alias: contact.alias,
             id: contact.id,
         })
@@ -98,8 +112,44 @@ fn overview(shared: State<'_, Shared>) -> CommandResult<Overview> {
         my_id,
         link,
         qr_svg,
+        my_avatar: data_url(shared.core.my_avatar()),
         contacts,
     })
+}
+
+/// Sets our profile picture from the bytes the window sends (a JPEG it
+/// scaled down), or removes it when they are empty.
+#[tauri::command]
+fn set_avatar(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    request: Request<'_>,
+) -> CommandResult<()> {
+    // A call without a body removes the picture.
+    let image = match request.body() {
+        InvokeBody::Raw(bytes) => bytes.clone(),
+        InvokeBody::Json(_) => Vec::new(),
+    };
+    shared.core.set_avatar(image).map_err(failed)?;
+    notify_changed(&app, String::new(), "other");
+    Ok(())
+}
+
+/// Turns a picture into a `data:` URL the windows can show without
+/// touching the disk. The type comes from the picture's own signature.
+fn data_url(image: Option<Vec<u8>>) -> Option<String> {
+    let image = image?;
+    let mime = if image.starts_with(&[0xff, 0xd8]) {
+        "image/jpeg"
+    } else if image.starts_with(b"\x89PNG") {
+        "image/png"
+    } else if image.starts_with(b"GIF8") {
+        "image/gif"
+    } else {
+        "image/webp"
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(image);
+    Some(format!("data:{mime};base64,{encoded}"))
 }
 
 #[tauri::command]
@@ -145,12 +195,14 @@ fn open_chat(app: AppHandle, shared: State<'_, Shared>, peer: String) -> Command
         return window.set_focus().map_err(|err| err.to_string());
     }
     let url = WebviewUrl::App(format!("chat.html#{peer}").into());
-    WebviewWindowBuilder::new(&app, label, url)
+    let window = WebviewWindowBuilder::new(&app, label, url)
         .title(format!("{alias} – Szept"))
         .inner_size(420.0, 620.0)
         .min_inner_size(320.0, 380.0)
         .build()
         .map_err(|err| err.to_string())?;
+    // The microphone, for voice messages.
+    allow_media(&window);
     Ok(())
 }
 
@@ -160,6 +212,7 @@ fn chat(shared: State<'_, Shared>, peer: String) -> CommandResult<ChatView> {
     let messages = shared.store.lock().unwrap().conversation(&peer);
     Ok(ChatView {
         online: shared.core.is_online(peer.clone()),
+        avatar: data_url(shared.core.avatar(peer.clone())),
         alias,
         id: peer,
         messages,
@@ -219,48 +272,128 @@ fn send_paths(app: AppHandle, peer: String, paths: Vec<PathBuf>) {
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let shared = app.state::<Shared>();
         for path in paths {
-            match shared
-                .core
-                .send_file(peer.clone(), path.to_string_lossy().into_owned())
-            {
-                Ok(sent) => {
-                    // Let the windows show pictures and play music we send.
-                    let _ = app.asset_protocol_scope().allow_file(&path);
-                    let file = FileInfo {
-                        kind: file_kind(sent.name.clone()),
-                        name: sent.name,
-                        size: sent.size,
-                        hash: sent.hash,
-                        transfer: Transfer::Shared,
-                        done: sent.size,
-                        path: Some(path.to_string_lossy().into_owned()),
-                        reason: None,
-                    };
-                    shared
-                        .store
-                        .lock()
-                        .unwrap()
-                        .push(&peer, Message::outgoing_file(sent.id, file));
-                    notify_changed(&app, peer.clone(), "other");
-                }
-                Err(err) => {
-                    let name = path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |name| name.to_string_lossy().into_owned(),
-                    );
-                    let _ = app.emit(
-                        "problem",
-                        Problem {
-                            peer: peer.clone(),
-                            text: format!("Nie udało się wysłać {name}: {err}"),
-                        },
-                    );
-                }
-            }
+            offer_path(&app, &peer, &path, None);
         }
     });
+}
+
+/// Offers one file, or a voice message or GIF when `media` is set, and
+/// adds it to the conversation. Blocks while the file is hashed.
+fn offer_path(app: &AppHandle, peer: &str, path: &Path, media: Option<Media>) {
+    let shared = app.state::<Shared>();
+    let text_path = path.to_string_lossy().into_owned();
+    let result = match media {
+        None => shared.core.send_file(peer.to_owned(), text_path.clone()),
+        Some(media) => shared
+            .core
+            .send_media(peer.to_owned(), text_path.clone(), media),
+    };
+    match result {
+        Ok(sent) => {
+            // Let the windows show pictures and play music we send.
+            let _ = app.asset_protocol_scope().allow_file(path);
+            let (media, duration_ms) = describe_media(media);
+            let file = FileInfo {
+                kind: file_kind(sent.name.clone()),
+                name: sent.name,
+                size: sent.size,
+                hash: sent.hash,
+                transfer: Transfer::Shared,
+                done: sent.size,
+                path: Some(text_path),
+                reason: None,
+                media,
+                duration_ms,
+            };
+            shared
+                .store
+                .lock()
+                .unwrap()
+                .push(peer, Message::outgoing_file(sent.id, file));
+            notify_changed(app, peer.to_owned(), "other");
+        }
+        Err(err) => {
+            let name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let text = match media {
+                Some(Media::Voice { .. }) => format!("Nie udało się wysłać nagrania: {err}"),
+                _ => format!("Nie udało się wysłać {name}: {err}"),
+            };
+            let _ = app.emit(
+                "problem",
+                Problem {
+                    peer: peer.to_owned(),
+                    text,
+                },
+            );
+        }
+    }
+}
+
+/// How the windows tell media apart: "voice" or "gif", and a length.
+fn describe_media(media: Option<Media>) -> (Option<&'static str>, Option<u32>) {
+    match media {
+        Some(Media::Voice { duration_ms }) => (Some("voice"), Some(duration_ms)),
+        Some(Media::Gif) => (Some("gif"), None),
+        None => (None, None),
+    }
+}
+
+/// Sends a voice message recorded in a conversation window, or a GIF pasted
+/// into it. The bytes come as the raw body; the headers say the rest:
+/// `peer`, `media` ("voice" or "gif"), `extension` and, for voice,
+/// `duration` in milliseconds.
+#[tauri::command]
+fn send_media(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    request: Request<'_>,
+) -> CommandResult<()> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("brak danych".into());
+    };
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let peer = header("peer");
+    alias_of(&shared, &peer).ok_or("nieznany kontakt")?;
+    let extension = header("extension").to_ascii_lowercase();
+    if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("nieznany typ pliku".into());
+    }
+    let (media, stem) = match header("media").as_str() {
+        "voice" => {
+            let duration_ms = header("duration").parse().unwrap_or(0);
+            (Media::Voice { duration_ms }, "glosowa")
+        }
+        "gif" => (Media::Gif, "gif"),
+        _ => return Err("nieznany rodzaj wiadomości".into()),
+    };
+    if bytes.is_empty() {
+        return Err("Nagranie jest puste.".into());
+    }
+    if bytes.len() as u64 > max_media_size() {
+        return Err("Ten plik jest za duży na wiadomość. Wyślij go spinaczem.".into());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    // Each one gets its own folder, so two names never clash.
+    let dir = shared.outgoing.join(stamp.to_string());
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let path = dir.join(format!("{stem}-{}.{extension}", stamp / 1_000_000));
+    std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || offer_path(&app, &peer, &path, Some(media)));
+    Ok(())
 }
 
 /// Starts or resumes fetching a file the contact offered.
@@ -384,7 +517,9 @@ impl EventListener for Listener {
                 name,
                 size,
                 hash,
+                media,
             } => {
+                let (media, duration_ms) = describe_media(media);
                 let file = FileInfo {
                     kind: file_kind(name.clone()),
                     name,
@@ -394,6 +529,8 @@ impl EventListener for Listener {
                     done: 0,
                     path: None,
                     reason: None,
+                    media,
+                    duration_ms,
                 };
                 let message = Message {
                     id,
@@ -425,6 +562,7 @@ impl EventListener for Listener {
             }
             ChatEvent::FileSaved { peer, id, path } => {
                 let _ = self.app.asset_protocol_scope().allow_file(&path);
+                let mut media = false;
                 let changed = shared
                     .store
                     .lock()
@@ -433,11 +571,14 @@ impl EventListener for Listener {
                         file.transfer = Transfer::Saved;
                         file.done = file.size;
                         file.path = Some(path);
+                        media = file.media.is_some();
                     });
                 if changed {
-                    notify_changed(&self.app, peer, "saved");
+                    // Media arrive on their own: their message already chimed.
+                    notify_changed(&self.app, peer, if media { "other" } else { "saved" });
                 }
             }
+            ChatEvent::AvatarChanged { peer } => notify_changed(&self.app, peer, "other"),
             ChatEvent::FileFailed { peer, id, reason } => {
                 let changed = shared
                     .store
@@ -551,11 +692,12 @@ fn qr_svg(text: &str) -> CommandResult<String> {
     ))
 }
 
-/// WebKitGTK keeps the camera off unless asked, and then asks the app about
-/// every request. The scanner in the main window is the only page that uses
-/// it, and only after the person presses the button.
+/// WebKitGTK keeps the camera and the microphone off unless asked, and then
+/// asks the app about every request. The scanner in the main window uses the
+/// camera and the conversation windows the microphone, each only after the
+/// person presses the button.
 #[cfg(target_os = "linux")]
-fn allow_camera(window: &tauri::WebviewWindow) {
+fn allow_media(window: &tauri::WebviewWindow) {
     use webkit2gtk::{
         PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt,
         glib::object::ObjectExt,
@@ -577,7 +719,7 @@ fn allow_camera(window: &tauri::WebviewWindow) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn allow_camera(_window: &tauri::WebviewWindow) {}
+fn allow_media(_window: &tauri::WebviewWindow) {}
 
 fn main() {
     tauri::Builder::default()
@@ -588,20 +730,28 @@ fn main() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let core = App::new(data_dir.to_string_lossy().into_owned(), false)?;
+            // Offers end with the app, so last session's recordings can go.
+            let outgoing = data_dir.join("outgoing");
+            let _ = std::fs::remove_dir_all(&outgoing);
             app.manage(Shared {
                 core: core.clone(),
                 store: Mutex::new(Store::default()),
+                outgoing,
             });
             core.start(Arc::new(Listener {
                 app: app.handle().clone(),
             }))?;
             if let Some(main) = app.get_webview_window("main") {
-                allow_camera(&main);
+                allow_media(&main);
             }
-            // Pictures and music already received can be shown and played.
+            // Pictures and music already received can be shown and played,
+            // and so can voice messages and GIFs.
             if let Ok(dir) = downloads_dir(app.handle()) {
                 let _ = app.asset_protocol_scope().allow_directory(dir, true);
             }
+            let media = PathBuf::from(core.media_dir());
+            let _ = std::fs::create_dir_all(&media);
+            let _ = app.asset_protocol_scope().allow_directory(media, true);
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -633,6 +783,8 @@ fn main() {
             mark_read,
             send,
             send_files,
+            send_media,
+            set_avatar,
             download,
             open_file,
             reveal,

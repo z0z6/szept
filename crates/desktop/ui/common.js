@@ -77,6 +77,31 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+// Mirrors MAX_MEDIA_SIZE and MAX_AVATAR_LEN in crates/core/src/protocol.rs.
+const MAX_MEDIA_SIZE = 16 * 1024 * 1024;
+const MAX_AVATAR_LEN = 48 * 1024;
+
+const PERSON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="4" fill="currentColor"/><path d="M4 20.5c.8-4 4-6.2 8-6.2s7.2 2.2 8 6.2" fill="currentColor"/></svg>';
+
+// Shows a profile picture in an avatar circle, or the first letter of the
+// name when there is none. Without a name, a person outline.
+function fillAvatar(node, name, url) {
+  if (url) {
+    node.replaceChildren(el("img", { src: url, alt: "", draggable: "false" }));
+  } else if (name) {
+    node.textContent = [...name][0] || "?";
+  } else {
+    node.innerHTML = PERSON_SVG;
+  }
+  node.classList.toggle("has-picture", Boolean(url));
+}
+
+// 0:07, 1:42, 12:05
+function formatDuration(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function errorText(err) {
   return typeof err === "string" ? err : err?.message || String(err);
 }
@@ -89,6 +114,10 @@ const ERRORS = [
   [/this is your own identifier/, "To Twój własny identyfikator."],
   [/not a valid identifier|identifier is empty/, "To nie jest identyfikator Szeptu."],
   [/message is too long/, "Wiadomość jest za długa."],
+  [/picture is too large/, "To zdjęcie jest za duże."],
+  [/must be a JPEG, PNG, WebP or GIF/, "Wybierz zdjęcie w formacie JPEG, PNG, WebP albo GIF."],
+  [/media file is too large/, "Ten plik jest za duży na wiadomość. Wyślij go spinaczem."],
+  [/cannot be sent as media/, "Tego pliku nie da się wysłać jako GIF. Wyślij go spinaczem."],
   [/app is offline|shutting down/, "Szept nie jest połączony z siecią."],
   [/no longer shares this file|offer is no longer known/, "Nadawca już nie udostępnia tego pliku."],
   [/changed or disappeared/, "Plik zmienił się albo zniknął u nadawcy."],

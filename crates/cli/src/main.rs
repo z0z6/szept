@@ -12,8 +12,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use komunikator_core::{
-    Contacts, EndpointAddr, EndpointId, Event, FileOffer, Identity, MessageId, Network, Node,
-    Outgoing, contacts, identity,
+    Contacts, EndpointAddr, EndpointId, Event, FileOffer, Identity, Media, MessageId, Network,
+    Node, Outgoing, contacts, identity,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -248,16 +248,25 @@ async fn chat(
                         println!("[{}] {}", name(contacts, &who), printable(&body));
                     }
                     Event::Delivered { .. } => println!("  ✓ dostarczono"),
-                    Event::FileOffered { peer: who, id, offer, .. } => {
+                    Event::FileOffered { peer: who, id, offer, media, .. } => {
                         offers.push((who, id, offer.clone()));
+                        let what = match media {
+                            Some(Media::Voice { duration_ms }) => {
+                                format!("wiadomość głosowa, {} s", duration_ms.div_ceil(1000))
+                            }
+                            Some(Media::Gif) => "GIF".to_owned(),
+                            None => "plik".to_owned(),
+                        };
                         println!(
-                            "[{}] plik {} ({} B), pobierz: /pobierz {}",
+                            "[{}] {what} {} ({} B), pobierz: /pobierz {}",
                             name(contacts, &who),
                             printable(&offer.name),
                             offer.size,
                             offers.len()
                         );
                     }
+                    // The terminal cannot show pictures.
+                    Event::Avatar { .. } => {}
                 }
             }
             _ = retry.tick() => {

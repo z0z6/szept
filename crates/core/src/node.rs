@@ -33,8 +33,8 @@ use crate::{
     files,
     identity::Identity,
     protocol::{
-        ALPN, FETCH_GONE, FETCH_OK, FETCH_UNKNOWN, FetchRequest, FileOffer, Frame, MAX_FRAME_LEN,
-        MessageId, Outgoing,
+        ALPN, FETCH_GONE, FETCH_OK, FETCH_UNKNOWN, FetchRequest, FileOffer, Frame, MAX_AVATAR_LEN,
+        MAX_FRAME_LEN, MAX_MEDIA_SIZE, Media, MessageId, Outgoing,
     },
 };
 
@@ -88,12 +88,19 @@ pub enum Event {
     /// A contact's device confirmed that it received our message.
     Delivered { peer: EndpointId, id: MessageId },
     /// A contact offers a file. Fetch it with [`Node::download`].
+    ///
+    /// With `media` set it is a voice message or a GIF, meant to be fetched
+    /// at once and shown inside the conversation.
     FileOffered {
         peer: EndpointId,
         id: MessageId,
         sent_at_ms: u64,
         offer: FileOffer,
+        media: Option<Media>,
     },
+    /// A contact sent their profile picture: a JPEG, PNG, WebP or GIF of at
+    /// most [`MAX_AVATAR_LEN`] bytes, or nothing when they removed it.
+    Avatar { peer: EndpointId, image: Vec<u8> },
 }
 
 /// A file this device offered to a contact.
@@ -234,19 +241,69 @@ impl Node {
     /// The file is read once here to compute its hash, and again whenever the
     /// contact fetches it. Until then it must stay where it is, unchanged.
     pub async fn share(&self, peer: EndpointId, path: &Path) -> Result<Outgoing> {
+        self.share_as(peer, path, None).await
+    }
+
+    /// Like [`Node::share`], for a voice message or a GIF. The file must be
+    /// at most [`MAX_MEDIA_SIZE`] bytes and of a type that fits `media`.
+    pub async fn share_media(
+        &self,
+        peer: EndpointId,
+        path: &Path,
+        media: Media,
+    ) -> Result<Outgoing> {
+        self.share_as(peer, path, Some(media)).await
+    }
+
+    async fn share_as(
+        &self,
+        peer: EndpointId,
+        path: &Path,
+        media: Option<Media>,
+    ) -> Result<Outgoing> {
         let path = path.to_owned();
         let offer = tokio::task::spawn_blocking({
             let path = path.clone();
             move || files::describe(&path)
         })
         .await??;
-        let message = Outgoing::file(offer.clone());
+        let message = match media {
+            None => Outgoing::file(offer.clone()),
+            Some(media) => {
+                ensure!(offer.size <= MAX_MEDIA_SIZE, "the media file is too large");
+                ensure!(
+                    media.accepts(&offer.name),
+                    "this file cannot be sent as media"
+                );
+                Outgoing::media(offer.clone(), media)
+            }
+        };
         self.inner
             .shares
             .lock()
             .unwrap()
             .insert(message.id, Share { peer, path, offer });
         Ok(message)
+    }
+
+    /// Sends our profile picture to a contact that is connected right now.
+    /// An empty `image` tells the contact we have none. Fails, sending
+    /// nothing, while the contact is offline: every new connection should
+    /// start with this call.
+    pub async fn send_avatar(&self, peer: EndpointId, image: &[u8]) -> Result<()> {
+        ensure!(image.len() <= MAX_AVATAR_LEN, "the picture is too large");
+        ensure!(
+            image.is_empty() || files::is_picture(image),
+            "this is not a JPEG, PNG, WebP or GIF picture"
+        );
+        let conn = self
+            .inner
+            .live_connection(&peer)
+            .context("the contact is not connected")?;
+        let frame = Frame::Avatar {
+            image: image.to_vec(),
+        };
+        write_frame(&conn, &frame).await
     }
 
     /// Stops offering the file sent as `id`.
@@ -473,18 +530,39 @@ impl Inner {
                 id,
                 sent_at_ms,
                 offer,
+            } => self.offered(conn, peer, id, sent_at_ms, offer, None).await,
+            Frame::Media {
+                id,
+                sent_at_ms,
+                offer,
+                media,
             } => {
-                self.emit(Event::FileOffered {
-                    peer,
-                    id,
-                    sent_at_ms,
-                    offer,
-                })
-                .await;
-                if let Err(err) = write_frame(conn, &Frame::Ack { id }).await {
-                    debug!(%peer, "cannot confirm offer {id}: {err}");
-                }
+                self.offered(conn, peer, id, sent_at_ms, offer, Some(media))
+                    .await;
             }
+            Frame::Avatar { image } => self.emit(Event::Avatar { peer, image }).await,
+        }
+    }
+
+    async fn offered(
+        &self,
+        conn: &Connection,
+        peer: EndpointId,
+        id: MessageId,
+        sent_at_ms: u64,
+        offer: FileOffer,
+        media: Option<Media>,
+    ) {
+        self.emit(Event::FileOffered {
+            peer,
+            id,
+            sent_at_ms,
+            offer,
+            media,
+        })
+        .await;
+        if let Err(err) = write_frame(conn, &Frame::Ack { id }).await {
+            debug!(%peer, "cannot confirm offer {id}: {err}");
         }
     }
 

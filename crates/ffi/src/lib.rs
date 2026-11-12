@@ -8,6 +8,8 @@ mod engine;
 
 use std::{
     collections::{HashMap, HashSet},
+    fs,
+    future::Future,
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
@@ -15,10 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow, bail, ensure};
 use komunikator_core::{
-    Contacts, EndpointAddr, EndpointId, Event, FileOffer, Identity, MessageId, Network, Node,
-    Outgoing, contacts, files, identity,
+    Contacts, Content, EndpointAddr, EndpointId, Event, FileOffer, Identity, MessageId, Network,
+    Node, Outgoing, contacts, files, identity,
+    protocol::{MAX_AVATAR_LEN, MAX_MEDIA_SIZE},
 };
 use tokio::{runtime::Runtime, sync::mpsc, task::JoinHandle};
 
@@ -49,6 +52,33 @@ pub struct Contact {
     pub id: String,
 }
 
+/// What a file offer is for, when it is more than a plain file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Media {
+    /// A recorded voice message of `duration_ms` milliseconds.
+    Voice { duration_ms: u32 },
+    /// An animated picture or a sticker, usually inserted from the keyboard.
+    Gif,
+}
+
+impl From<komunikator_core::Media> for Media {
+    fn from(media: komunikator_core::Media) -> Self {
+        match media {
+            komunikator_core::Media::Voice { duration_ms } => Self::Voice { duration_ms },
+            komunikator_core::Media::Gif => Self::Gif,
+        }
+    }
+}
+
+impl From<Media> for komunikator_core::Media {
+    fn from(media: Media) -> Self {
+        match media {
+            Media::Voice { duration_ms } => Self::Voice { duration_ms },
+            Media::Gif => Self::Gif,
+        }
+    }
+}
+
 /// Something that happened on the network. `peer` is the contact's identifier.
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum ChatEvent {
@@ -77,6 +107,10 @@ pub enum ChatEvent {
     },
     /// The contact offers a file. Fetch it with [`App::download`].
     /// `hash` is the BLAKE3 hash in hex, for comparing by eye.
+    ///
+    /// With `media` set it is a voice message or a GIF: the app starts
+    /// fetching it on its own into [`App::media_dir`], and reports that
+    /// like any other download.
     FileOffered {
         peer: String,
         id: String,
@@ -84,6 +118,12 @@ pub enum ChatEvent {
         name: String,
         size: u64,
         hash: String,
+        media: Option<Media>,
+    },
+    /// The contact set, changed or removed their profile picture. Read it
+    /// with [`App::avatar`].
+    AvatarChanged {
+        peer: String,
     },
     /// A download moved forward: `done` of `total` bytes.
     FileProgress {
@@ -144,6 +184,7 @@ impl From<Event> for ChatEvent {
                 id,
                 sent_at_ms,
                 offer,
+                media,
             } => Self::FileOffered {
                 peer: peer.to_string(),
                 id: id.to_string(),
@@ -151,6 +192,10 @@ impl From<Event> for ChatEvent {
                 hash: files::hash_hex(&offer.hash),
                 name: offer.name,
                 size: offer.size,
+                media: media.map(Media::from),
+            },
+            Event::Avatar { peer, .. } => Self::AvatarChanged {
+                peer: peer.to_string(),
             },
         }
     }
@@ -205,6 +250,18 @@ pub fn file_kind(name: String) -> String {
     files::kind(&name).to_owned()
 }
 
+/// The largest voice message or GIF, in bytes.
+#[uniffi::export]
+pub fn max_media_size() -> u64 {
+    MAX_MEDIA_SIZE
+}
+
+/// The largest profile picture, in bytes. Scale pictures down to fit.
+#[uniffi::export]
+pub fn max_avatar_len() -> u64 {
+    MAX_AVATAR_LEN as u64
+}
+
 /// Receives events. Called on a background thread.
 #[uniffi::export(with_foreign)]
 pub trait EventListener: Send + Sync {
@@ -219,13 +276,67 @@ pub struct App {
     contacts: Mutex<Contacts>,
     network: Network,
     running: Mutex<Option<Running>>,
-    /// Files contacts offered us, by message id.
-    offers: Offers,
-    /// Message ids of the downloads in progress.
-    downloading: Arc<Mutex<HashSet<String>>>,
+    shared: Arc<Shared>,
 }
 
-pub(crate) type Offers = Arc<Mutex<HashMap<String, (EndpointId, MessageId, FileOffer)>>>;
+/// What the commands and the background engine both use.
+pub(crate) struct Shared {
+    /// Files contacts offered us, by message id.
+    pub(crate) offers: Mutex<HashMap<String, (EndpointId, MessageId, FileOffer)>>,
+    /// Message ids of the downloads in progress.
+    pub(crate) downloading: Mutex<HashSet<String>>,
+    /// Where voice messages and GIFs from contacts land.
+    pub(crate) media_dir: PathBuf,
+    /// Contacts' profile pictures, one file per identifier.
+    pub(crate) avatars_dir: PathBuf,
+    /// Our own profile picture on disk.
+    avatar_path: PathBuf,
+    /// Our own profile picture, empty when there is none.
+    pub(crate) avatar: Mutex<Vec<u8>>,
+}
+
+impl Shared {
+    pub(crate) fn avatar_file(&self, peer: &EndpointId) -> PathBuf {
+        self.avatars_dir.join(format!("{peer}.img"))
+    }
+
+    /// Stores what a contact sent as their picture. Returns `true` if it
+    /// differs from what was stored before.
+    pub(crate) fn store_avatar(&self, peer: &EndpointId, image: &[u8]) -> bool {
+        let path = self.avatar_file(peer);
+        let old = fs::read(&path).unwrap_or_default();
+        if old == image {
+            return false;
+        }
+        let saved = if image.is_empty() {
+            fs::remove_file(&path)
+        } else {
+            fs::create_dir_all(&self.avatars_dir).and_then(|()| write_atomic(&path, image))
+        };
+        saved.is_ok()
+    }
+}
+
+fn check_avatar(image: &[u8]) -> anyhow::Result<()> {
+    ensure!(
+        image.len() <= MAX_AVATAR_LEN,
+        "the picture is too large ({} bytes, the limit is {MAX_AVATAR_LEN})",
+        image.len()
+    );
+    ensure!(
+        files::is_picture(image),
+        "the picture must be a JPEG, PNG, WebP or GIF"
+    );
+    Ok(())
+}
+
+/// Writes `bytes` next to `path` first, then moves them into place, so a
+/// crash never leaves half a picture behind.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let part = path.with_extension("part");
+    fs::write(&part, bytes)?;
+    fs::rename(&part, path)
+}
 
 struct Running {
     node: Node,
@@ -250,6 +361,11 @@ impl App {
             Identity::create(&identity_path)?
         };
         let contacts = Contacts::load(&contacts::default_path(&data_dir))?;
+        let avatar_path = data_dir.join("avatar.img");
+        let avatar = fs::read(&avatar_path)
+            .ok()
+            .filter(|image| image.len() <= MAX_AVATAR_LEN && files::is_picture(image))
+            .unwrap_or_default();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("szept")
@@ -266,8 +382,14 @@ impl App {
                 Network::Public
             },
             running: Mutex::new(None),
-            offers: Offers::default(),
-            downloading: Arc::default(),
+            shared: Arc::new(Shared {
+                offers: Mutex::default(),
+                downloading: Mutex::default(),
+                media_dir: data_dir.join("media"),
+                avatars_dir: data_dir.join("avatars"),
+                avatar_path,
+                avatar: Mutex::new(avatar),
+            }),
         }))
     }
 
@@ -312,6 +434,7 @@ impl App {
             contacts.remove(&alias)?;
             id
         };
+        let _ = fs::remove_file(self.shared.avatar_file(&id));
         if let Some(running) = &*self.running.lock().unwrap() {
             running.node.disallow(&id);
             let _ = running.commands.send(Command::ContactRemoved(id));
@@ -340,7 +463,7 @@ impl App {
             events,
             commands_rx,
             listener.clone(),
-            self.offers.clone(),
+            self.shared.clone(),
             known,
             // Without a lookup service there is nobody to ask for addresses.
             self.network == Network::Public,
@@ -384,17 +507,66 @@ impl App {
         let peer = parse_id(&peer)?;
         let node = self.node()?;
         let message = self.runtime.block_on(node.share(peer, Path::new(&path)))?;
-        let sent = match &message.content {
-            komunikator_core::Content::File(offer) => SentFile {
-                id: message.id.to_string(),
-                name: offer.name.clone(),
-                size: offer.size,
-                hash: files::hash_hex(&offer.hash),
-            },
-            komunikator_core::Content::Text(_) => unreachable!("share makes a file offer"),
-        };
-        self.command(Command::Send { peer, message })?;
-        Ok(sent)
+        self.offer(peer, message)
+    }
+
+    /// Sends a voice message or a GIF stored at `path`. Works like
+    /// [`App::send_file`], except that the contact's app fetches it at once.
+    ///
+    /// Voice messages must be `.m4a`, `.aac`, `.ogg`, `.oga`, `.opus`,
+    /// `.webm`, `.mp3` or `.wav`, GIFs `.gif`, `.webp`, `.png`, `.jpg` or
+    /// `.jpeg`, both at most [`max_media_size`] bytes.
+    pub fn send_media(&self, peer: String, path: String, media: Media) -> Result<SentFile> {
+        let peer = parse_id(&peer)?;
+        let node = self.node()?;
+        let message =
+            self.runtime
+                .block_on(node.share_media(peer, Path::new(&path), media.into()))?;
+        self.offer(peer, message)
+    }
+
+    /// Our profile picture, if there is one.
+    pub fn my_avatar(&self) -> Option<Vec<u8>> {
+        let avatar = self.shared.avatar.lock().unwrap();
+        (!avatar.is_empty()).then(|| avatar.clone())
+    }
+
+    /// Sets our profile picture, or removes it when `image` is empty, and
+    /// sends it to every contact: right away to the connected ones, on the
+    /// next connection to the others.
+    ///
+    /// The picture must be a JPEG, PNG, WebP or GIF of at most
+    /// [`max_avatar_len`] bytes: scale it down first. A square of 256 × 256
+    /// pixels in JPEG fits easily.
+    pub fn set_avatar(&self, image: Vec<u8>) -> Result<()> {
+        if image.is_empty() {
+            match fs::remove_file(&self.shared.avatar_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(anyhow!("cannot remove the picture: {err}").into()),
+            }
+        } else {
+            check_avatar(&image)?;
+            write_atomic(&self.shared.avatar_path, &image).context("cannot save the picture")?;
+        }
+        *self.shared.avatar.lock().unwrap() = image;
+        // Offline is fine: the picture goes out with the next connection.
+        let _ = self.command(Command::AvatarChanged);
+        Ok(())
+    }
+
+    /// The profile picture a contact sent us, if any. Arrives with
+    /// [`ChatEvent::AvatarChanged`] and stays after a restart.
+    pub fn avatar(&self, peer: String) -> Option<Vec<u8>> {
+        let peer = parse_id(&peer).ok()?;
+        fs::read(self.shared.avatar_file(&peer))
+            .ok()
+            .filter(|image| image.len() <= MAX_AVATAR_LEN && files::is_picture(image))
+    }
+
+    /// Where voice messages and GIFs from contacts are saved.
+    pub fn media_dir(&self) -> String {
+        self.shared.media_dir.to_string_lossy().into_owned()
     }
 
     /// Downloads the file offered as `id` into the directory `dir`, in the
@@ -402,59 +574,16 @@ impl App {
     /// [`ChatEvent::FileSaved`] or [`ChatEvent::FileFailed`]. Calling it again
     /// after a failure resumes where the transfer stopped.
     pub fn download(&self, id: String, dir: String) -> Result<()> {
-        let (peer, message_id, offer) = self
-            .offers
-            .lock()
-            .unwrap()
-            .get(&id)
-            .cloned()
-            .context("this file offer is no longer known")?;
-        if !self.downloading.lock().unwrap().insert(id.clone()) {
-            return Ok(());
-        }
         let (node, listener) = {
             let running = self.running.lock().unwrap();
             let Some(running) = &*running else {
-                self.downloading.lock().unwrap().remove(&id);
                 return Err(anyhow!("the app is offline").into());
             };
             (running.node.clone(), running.listener.clone())
         };
-        let downloading = self.downloading.clone();
-        self.runtime.spawn(async move {
-            let peer_text = peer.to_string();
-            let total = offer.size;
-            let mut last = (Instant::now(), 0u64);
-            let progress = |done: u64| {
-                // At most about five reports a second, plus the last one.
-                let due = last.0.elapsed() >= Duration::from_millis(200) || done == total;
-                if due && (done != last.1 || done == 0) {
-                    last = (Instant::now(), done);
-                    listener.on_event(ChatEvent::FileProgress {
-                        peer: peer_text.clone(),
-                        id: id.clone(),
-                        done,
-                        total,
-                    });
-                }
-            };
-            let result = node
-                .download(peer, message_id, &offer, Path::new(&dir), progress)
-                .await;
-            downloading.lock().unwrap().remove(&id);
-            listener.on_event(match result {
-                Ok(path) => ChatEvent::FileSaved {
-                    peer: peer.to_string(),
-                    id,
-                    path: path.to_string_lossy().into_owned(),
-                },
-                Err(err) => ChatEvent::FileFailed {
-                    peer: peer.to_string(),
-                    id,
-                    reason: format!("{err:#}"),
-                },
-            });
-        });
+        if let Some(task) = download_task(&self.shared, node, listener, id, PathBuf::from(dir))? {
+            self.runtime.spawn(task);
+        }
         Ok(())
     }
 
@@ -506,7 +635,79 @@ impl App {
     }
 }
 
+/// Prepares the download of the file offered as `id` into `dir`. Returns
+/// `None` while that download is already running. Spawn the task on the
+/// app's runtime.
+pub(crate) fn download_task(
+    shared: &Arc<Shared>,
+    node: Node,
+    listener: Arc<dyn EventListener>,
+    id: String,
+    dir: PathBuf,
+) -> anyhow::Result<Option<impl Future<Output = ()> + Send + 'static>> {
+    let (peer, message_id, offer) = shared
+        .offers
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .context("this file offer is no longer known")?;
+    if !shared.downloading.lock().unwrap().insert(id.clone()) {
+        return Ok(None);
+    }
+    let shared = shared.clone();
+    Ok(Some(async move {
+        let peer_text = peer.to_string();
+        let total = offer.size;
+        let mut last = (Instant::now(), 0u64);
+        let progress = |done: u64| {
+            // At most about five reports a second, plus the last one.
+            let due = last.0.elapsed() >= Duration::from_millis(200) || done == total;
+            if due && (done != last.1 || done == 0) {
+                last = (Instant::now(), done);
+                listener.on_event(ChatEvent::FileProgress {
+                    peer: peer_text.clone(),
+                    id: id.clone(),
+                    done,
+                    total,
+                });
+            }
+        };
+        let result = node
+            .download(peer, message_id, &offer, &dir, progress)
+            .await;
+        shared.downloading.lock().unwrap().remove(&id);
+        listener.on_event(match result {
+            Ok(path) => ChatEvent::FileSaved {
+                peer: peer.to_string(),
+                id,
+                path: path.to_string_lossy().into_owned(),
+            },
+            Err(err) => ChatEvent::FileFailed {
+                peer: peer.to_string(),
+                id,
+                reason: format!("{err:#}"),
+            },
+        });
+    }))
+}
+
 impl App {
+    /// Queues a file offer made by the node and describes it.
+    fn offer(&self, peer: EndpointId, message: Outgoing) -> Result<SentFile> {
+        let sent = match &message.content {
+            Content::File(offer) | Content::Media(offer, _) => SentFile {
+                id: message.id.to_string(),
+                name: offer.name.clone(),
+                size: offer.size,
+                hash: files::hash_hex(&offer.hash),
+            },
+            Content::Text(_) => unreachable!("share makes a file offer"),
+        };
+        self.command(Command::Send { peer, message })?;
+        Ok(sent)
+    }
+
     fn node(&self) -> Result<Node> {
         let running = self.running.lock().unwrap();
         running

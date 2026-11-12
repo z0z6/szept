@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Rozmowa – Szept</title>
   <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <div class="chat">
@@ -25,6 +26,13 @@
         <div class="emoji-grid" id="emoji-grid" role="tabpanel"></div>
         <p class="emoji-hint" id="emoji-hint" hidden></p>
       </div>
+      <div class="recorder" id="recorder" hidden>
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span class="rec-time" id="rec-time" role="timer" aria-live="off">0:00</span>
+        <span class="rec-label">Nagrywanie…</span>
+        <button class="button" id="rec-cancel" type="button">Anuluj</button>
+        <button class="button primary" id="rec-send" type="button">Wyślij</button>
+      </div>
       <button class="icon-button emoji-toggle" id="emoji-toggle" type="button"
         aria-label="Emoji" aria-expanded="false" aria-controls="emoji-panel">😊</button>
       <button class="icon-button" id="attach" type="button" title="Wyślij pliki (albo przeciągnij je na okno)"
@@ -33,7 +41,11 @@
       </button>
       <label class="visually-hidden" for="draft">Wiadomość</label>
       <textarea id="draft" rows="1" placeholder="Wiadomość"></textarea>
-      <button class="button primary" id="send" type="submit" disabled>Wyślij</button>
+      <button class="icon-button mic" id="record" type="button"
+        title="Nagraj wiadomość głosową" aria-label="Nagraj wiadomość głosową">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+      <button class="button primary" id="send" type="submit" hidden>Wyślij</button>
     </form>
   </div>
 

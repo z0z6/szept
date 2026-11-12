@@ -250,3 +250,78 @@ async fn files_travel_directly_and_are_verified() {
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(downloads);
 }
+
+#[tokio::test]
+async fn voice_messages_gifs_and_avatars_arrive() {
+    use komunikator_core::{Content, Media};
+
+    let (ala_identity, ola_identity) = (new_identity(), new_identity());
+    let (ala_id, ola_id) = (ala_identity.id(), ola_identity.id());
+    let (ala, mut ala_events) = Node::spawn(&ala_identity, [ola_id], Network::LocalOnly)
+        .await
+        .unwrap();
+    let (ola, mut ola_events) = Node::spawn(&ola_identity, [ala_id], Network::LocalOnly)
+        .await
+        .unwrap();
+    ala.connect(loopback(&ola)).await.unwrap();
+    next(&mut ala_events).await;
+    next(&mut ola_events).await;
+
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let voice = dir.join("glosowa.ogg");
+    std::fs::write(&voice, b"OggS and some sound").unwrap();
+    let media = Media::Voice { duration_ms: 2400 };
+    let message = ala.share_media(ola_id, &voice, media).await.unwrap();
+    assert!(matches!(&message.content, Content::Media(_, got) if *got == media));
+    ala.send(ola_id, &message).await.unwrap();
+
+    let offer = match next(&mut ola_events).await {
+        Event::FileOffered {
+            id,
+            offer,
+            media: got,
+            ..
+        } => {
+            assert_eq!(id, message.id);
+            assert_eq!(got, Some(media));
+            offer
+        }
+        other => panic!("unexpected event: {other:?}"),
+    };
+    let saved = ola
+        .download(ala_id, message.id, &offer, &dir.join("in"), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(saved).unwrap(), b"OggS and some sound");
+
+    // A program is not a GIF, and a big file is not a voice message.
+    let program = dir.join("kot.exe");
+    std::fs::write(&program, b"MZ").unwrap();
+    assert!(ala.share_media(ola_id, &program, Media::Gif).await.is_err());
+
+    // A profile picture goes straight to the contact; empty means removed.
+    let picture = b"\xff\xd8\xff\xe0 a tiny jpeg".to_vec();
+    ala.send_avatar(ola_id, &picture).await.unwrap();
+    loop {
+        match next(&mut ola_events).await {
+            Event::Avatar { peer, image } => {
+                assert_eq!(peer, ala_id);
+                assert_eq!(image, picture);
+                break;
+            }
+            Event::Delivered { .. } => {}
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    assert!(ala.send_avatar(ola_id, b"<svg/>").await.is_err());
+    ala.send_avatar(ola_id, &[]).await.unwrap();
+    assert!(matches!(
+        next(&mut ola_events).await,
+        Event::Avatar { image, .. } if image.is_empty()
+    ));
+
+    ala.shutdown().await;
+    ola.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}

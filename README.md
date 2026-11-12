@@ -43,6 +43,15 @@ Programy nigdy nie otwierają się same. Przy programie od kontaktu widać ostrz
 
 Pobrane pliki trafiają do `Pobrane/Szept` na komputerze i do prywatnej pamięci aplikacji na Androidzie, skąd „Zapisz jako…” kopiuje je w wybrane miejsce.
 
+## Wiadomości głosowe, GIF-y i zdjęcie profilowe
+
+- Gdy pole wiadomości jest puste, w miejscu przycisku „Wyślij” jest mikrofon. Nagranie wysyła „Wyślij”, a „Anuluj” (albo Esc, albo „Wstecz”) je porzuca. Najdłuższe nagranie trwa 10 minut. Android nagrywa AAC (`.m4a`); komputer to, co umie jego silnik przeglądarki (Opus w `.webm`/`.ogg` albo AAC).
+- GIF-y i naklejki wstawia się z klawiatury systemowej: na Androidzie z panelu GIF-ów Gboard, SwiftKey czy klawiatury Samsunga, na komputerze przez wklejenie obrazu do pola wiadomości (także z zakładki GIF w panelu Win + . na Windows).
+- Wiadomości głosowe i GIF-y są zwykłymi plikami P2P z limitem 16 MB, które aplikacja odbiorcy pobiera sama, bez naciskania „Pobierz”. Jak każdy plik czekają u nadawcy, więc nadawca musi mieć Szept włączony, dopóki nie dotrą.
+- Zdjęcie profilowe ustawia się w ustawieniach (zdjęcie w prawym górnym rogu). Jest przycinane do kwadratu i zmniejszane do JPEG poniżej 48 kB. Kontakty dostają je przy każdym połączeniu, więc zmiana dotrze także do tych, którzy są teraz offline. Zdjęcia kontaktów zostają po restarcie.
+- Dziesięć motywów kolorystycznych (Szept, Las, Morze, Wrzos, Bursztyn, Malina, Grafit, Koral, Lazur, Oliwka), każdy w wersji jasnej i ciemnej, z wyborem „Jak w systemie / Jasny / Ciemny”. Wybór zostaje na urządzeniu.
+- Starsze wersje Szeptu pomijają głosówki, GIF-y i zdjęcia profilowe, a zwykłe wiadomości i pliki działają z nimi jak dotąd.
+
 ## Wspólne dla aplikacji okienkowych
 
 - Każdy ma swój kod QR z identyfikatorem (`szept:<identyfikator>`). Kontakt dodaje się, skanując kod drugiej osoby aparatem lub kamerą internetową, wczytując obraz z kodem (na komputerze) albo wklejając identyfikator.
@@ -71,7 +80,7 @@ Aplikacja (`crates/desktop`, [Tauri 2](https://tauri.app)) ma okno z kontaktami 
 
 Paczki z CI:
 
-- Linux: AppImage i .deb, dla dystrybucji z glibc 2.35 i nowszą (Ubuntu 22.04+, Debian 12+, Fedora 36+). Kamera wymaga wtyczek GStreamera; AppImage ma je w środku, a .deb doinstaluje `gstreamer1.0-plugins-good`.
+- Linux: AppImage i .deb, dla dystrybucji z glibc 2.35 i nowszą (Ubuntu 22.04+, Debian 12+, Fedora 36+). Kamera i dźwięk wymagają wtyczek GStreamera; AppImage ma je w środku, a .deb doinstaluje `gstreamer1.0-plugins-good` i `gstreamer1.0-libav` (to drugie odtwarza głosówki z Androida, nagrane w AAC).
 - Windows 10 i 11: instalator `-setup.exe`. Korzysta z WebView2, który jest w systemie.
 - macOS 12+ na procesorach Apple: `.dmg`, podpisany tylko lokalnie (ad hoc). Przy pierwszym uruchomieniu kliknij aplikację z wciśniętym Ctrl i wybierz „Otwórz”.
 

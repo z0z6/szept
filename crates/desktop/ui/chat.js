@@ -69,6 +69,105 @@ function media(message, tag) {
   return node;
 }
 
+// Only one voice message plays at a time.
+let playing = null;
+
+function voicePlayer(message) {
+  const file = message.file;
+  const key = `voice:${message.id}:${file.path}`;
+  let node = mediaCache.get(key);
+  if (node) return node;
+
+  const total = file.duration_ms || 0;
+  const audio = new Audio(tauri.core.convertFileSrc(file.path));
+  audio.preload = "metadata";
+  const button = el("button", { class: "voice-play", type: "button", "aria-label": "Odtwórz" });
+  const seek = el("input", {
+    class: "voice-seek",
+    type: "range",
+    min: "0",
+    max: "1000",
+    value: "0",
+    "aria-label": "Postęp nagrania",
+  });
+  const time = el("span", { class: "voice-time", text: formatDuration(total) });
+
+  // Recordings from a browser often carry no length; ours travels along.
+  const length = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration * 1000 : total);
+  const draw = () => {
+    const done = audio.currentTime * 1000;
+    const whole = length();
+    seek.value = String(whole ? Math.min(1000, Math.round((done / whole) * 1000)) : 0);
+    time.textContent = audio.paused && done === 0 ? formatDuration(whole) : formatDuration(done);
+    const on = !audio.paused;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-label", on ? "Pauza" : "Odtwórz");
+  };
+  button.addEventListener("click", () => {
+    if (audio.paused) {
+      if (playing && playing !== audio) playing.pause();
+      playing = audio;
+      audio.play().catch(() => showProblem("Nie udało się odtworzyć nagrania."));
+    } else {
+      audio.pause();
+    }
+  });
+  seek.addEventListener("input", () => {
+    const whole = length();
+    if (whole) audio.currentTime = (Number(seek.value) / 1000) * (whole / 1000);
+  });
+  for (const name of ["timeupdate", "play", "pause", "loadedmetadata"]) audio.addEventListener(name, draw);
+  audio.addEventListener("ended", () => {
+    audio.currentTime = 0;
+    draw();
+  });
+  draw();
+
+  node = el("div", { class: "voice" }, button, seek, time);
+  mediaCache.set(key, node);
+  return node;
+}
+
+// A voice message or a GIF: fetched on its own, shown without a file card.
+function mediaContent(message) {
+  const file = message.file;
+  const local = file.path && (file.transfer === "saved" || file.transfer === "shared");
+  if (local) {
+    if (file.media === "voice") return voicePlayer(message);
+    const key = `gif:${message.id}:${file.path}`;
+    let node = mediaCache.get(key);
+    if (!node) {
+      node = el("img", {
+        class: "gif",
+        src: tauri.core.convertFileSrc(file.path),
+        alt: "GIF",
+        draggable: "false",
+      });
+      mediaCache.set(key, node);
+    }
+    return node;
+  }
+  const what = file.media === "voice" ? `Wiadomość głosowa, ${formatDuration(file.duration_ms || 0)}` : "GIF";
+  const box = el("div", { class: "media-wait" }, el("span", { text: what }));
+  if (file.transfer === "failed") {
+    box.append(
+      el("span", { class: "file-error", text: "Nie udało się pobrać." }),
+      el("button", {
+        class: "button",
+        type: "button",
+        text: "Pobierz ponownie",
+        onclick: () => act("download", message.id),
+      }),
+    );
+  } else {
+    box.append(el("span", { class: "file-meta", text: "Pobieranie…" }));
+    if (file.transfer === "downloading" && file.size) {
+      box.append(el("progress", { max: String(file.size), value: String(file.done) }));
+    }
+  }
+  return box;
+}
+
 async function act(command, id) {
   try {
     await invoke(command, { peer, id });
@@ -150,11 +249,12 @@ async function refresh() {
     $("presence").textContent = friendly(err);
     $("draft").disabled = true;
     $("send").disabled = true;
+    $("record").disabled = true;
     return;
   }
   document.title = `${data.alias} – Szept`;
   $("alias").textContent = data.alias;
-  $("avatar").textContent = [...data.alias][0] || "?";
+  fillAvatar($("avatar"), data.alias, data.avatar);
   $("avatar").dataset.online = String(data.online);
   $("presence").textContent = data.online
     ? "Połączony"
@@ -181,6 +281,7 @@ function renderMessages(messages, alias) {
     shown.add(message.id);
     const classes = ["bubble", message.mine ? "mine" : "theirs"];
     if (!message.file && onlyEmoji(message.body)) classes.push("big-emoji");
+    if (message.file?.media) classes.push(`media-${message.file.media}`);
     if (fresh) classes.push("fresh");
 
     const meta = el("span", { class: "meta" }, el("span", { text: timeFormat.format(when) }));
@@ -197,7 +298,11 @@ function renderMessages(messages, alias) {
       tick.innerHTML = status.svg;
       meta.append(tick);
     }
-    const content = message.file ? fileCard(message, alias) : el("div", { class: "body", text: message.body });
+    const content = message.file?.media
+      ? mediaContent(message)
+      : message.file
+        ? fileCard(message, alias)
+        : el("div", { class: "body", text: message.body });
     nodes.push(el("div", { class: classes.join(" ") }, content, meta));
   });
 
@@ -240,7 +345,10 @@ const draft = $("draft");
 function fitDraft() {
   draft.style.height = "auto";
   draft.style.height = `${Math.min(draft.scrollHeight, 144)}px`;
-  $("send").disabled = draft.value.trim() === "";
+  // An empty field offers the microphone instead of the send button.
+  const empty = draft.value.trim() === "";
+  $("send").hidden = empty;
+  $("record").hidden = !empty;
 }
 
 draft.addEventListener("input", fitDraft);
@@ -335,7 +443,7 @@ document.addEventListener("click", (event) => {
 // The system's own picker works in the message field too.
 const platform = navigator.userAgent;
 const shortcut = /Windows/.test(platform)
-  ? "Win + . otwiera systemowy wybór emoji."
+  ? "Win + . otwiera systemowy wybór emoji i GIF-ów."
   : /Mac OS X|Macintosh/.test(platform)
     ? "Ctrl + Cmd + Spacja otwiera systemowy wybór emoji."
     : "";
@@ -344,7 +452,143 @@ if (shortcut) {
   $("emoji-hint").hidden = false;
 }
 
+// GIFs and stickers pasted into the message field, for example from the
+// GIF tab of the Windows emoji panel (Win + .), go out as GIFs.
+const GIF_TYPES = { "image/gif": "gif", "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg" };
+
+draft.addEventListener("paste", (event) => {
+  const pictures = [...(event.clipboardData?.files || [])].filter((file) => GIF_TYPES[file.type]);
+  if (!pictures.length) return;
+  event.preventDefault();
+  for (const picture of pictures) sendGif(picture);
+});
+
+async function sendGif(picture) {
+  if (picture.size > MAX_MEDIA_SIZE) {
+    showProblem("Ten obraz jest za duży na GIF. Wyślij go spinaczem.");
+    return;
+  }
+  try {
+    const bytes = new Uint8Array(await picture.arrayBuffer());
+    await invoke("send_media", bytes, {
+      headers: { peer, media: "gif", extension: GIF_TYPES[picture.type] },
+    });
+    showProblem("");
+  } catch (err) {
+    showProblem(friendly(err));
+  }
+}
+
+// Voice messages
+const MAX_VOICE_MS = 10 * 60 * 1000;
+// Tried in order; each system's web view records at least one of them.
+const VOICE_TYPES = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4", "audio/webm"];
+let recording = null;
+
+function voiceType() {
+  if (!window.MediaRecorder) return null;
+  if (typeof MediaRecorder.isTypeSupported !== "function") return "";
+  return VOICE_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) ?? null;
+}
+
+function extensionFor(mime) {
+  if (/ogg/.test(mime)) return "ogg";
+  if (/webm/.test(mime)) return "webm";
+  if (/mp4|aac|m4a/.test(mime)) return "m4a";
+  return "webm";
+}
+
+$("record").addEventListener("click", startRecording);
+$("rec-cancel").addEventListener("click", () => stopRecording(false));
+$("rec-send").addEventListener("click", () => stopRecording(true));
+
+async function startRecording() {
+  if (recording) return;
+  showProblem("");
+  const type = voiceType();
+  if (type === null || !navigator.mediaDevices?.getUserMedia) {
+    showProblem("Ten system nie pozwala tu nagrywać dźwięku.");
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: false,
+    });
+  } catch (err) {
+    showProblem(err?.name === "NotFoundError"
+      ? "Nie znaleziono mikrofonu."
+      : "Brak dostępu do mikrofonu. Zezwól na niego w ustawieniach systemu.");
+    return;
+  }
+  let recorder;
+  try {
+    recorder = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 32000 } : {});
+  } catch {
+    for (const track of stream.getTracks()) track.stop();
+    showProblem("Ten system nie pozwala tu nagrywać dźwięku.");
+    return;
+  }
+  const chunks = [];
+  recording = { recorder, stream, chunks, started: performance.now(), send: false, timer: 0 };
+  recorder.addEventListener("dataavailable", (event) => {
+    if (event.data.size) chunks.push(event.data);
+  });
+  recorder.addEventListener("stop", finishRecording);
+  recorder.start(500);
+
+  closeEmoji();
+  $("composer").classList.add("recording");
+  $("recorder").hidden = false;
+  $("rec-time").textContent = "0:00";
+  recording.timer = setInterval(() => {
+    const elapsed = performance.now() - recording.started;
+    $("rec-time").textContent = formatDuration(elapsed);
+    if (elapsed >= MAX_VOICE_MS) stopRecording(true);
+  }, 250);
+  $("rec-send").focus();
+}
+
+function stopRecording(send) {
+  if (!recording || recording.recorder.state === "inactive") return;
+  recording.send = send;
+  recording.duration = Math.round(performance.now() - recording.started);
+  clearInterval(recording.timer);
+  recording.recorder.stop();
+}
+
+async function finishRecording() {
+  const { recorder, stream, chunks, send, duration } = recording;
+  recording = null;
+  for (const track of stream.getTracks()) track.stop();
+  $("composer").classList.remove("recording");
+  $("recorder").hidden = true;
+  draft.focus();
+  // Shorter than half a second is a slip of the finger.
+  if (!send || duration < 500 || !chunks.length) return;
+  const mime = recorder.mimeType || chunks[0].type || "";
+  const blob = new Blob(chunks, { type: mime });
+  if (blob.size > MAX_MEDIA_SIZE) {
+    showProblem("Nagranie jest za długie.");
+    return;
+  }
+  try {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    await invoke("send_media", bytes, {
+      headers: { peer, media: "voice", extension: extensionFor(mime), duration: String(duration) },
+    });
+  } catch (err) {
+    showProblem(friendly(err));
+  }
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && recording) stopRecording(false);
+});
+
 window.addEventListener("focus", () => invoke("mark_read", { peer }).catch(() => {}));
 
 refresh();
+fitDraft();
 draft.focus();

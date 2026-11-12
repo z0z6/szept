@@ -5,10 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Szept</title>
   <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <main class="main">
-    <h1 class="brand"><span id="logo"></span>Szept</h1>
+    <header class="top">
+      <h1 class="brand"><span id="logo"></span>Szept</h1>
+      <button class="profile-button" id="settings-open" type="button"
+        title="Twoje zdjęcie i wygląd" aria-label="Ustawienia: Twoje zdjęcie i wygląd">
+        <span class="avatar" id="my-avatar" aria-hidden="true"></span>
+        <svg class="gear" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
 
     <section class="my-code" aria-labelledby="my-code-title">
       <button class="qr-button" id="qr-small" type="button" aria-label="Powiększ kod QR"></button>
@@ -72,6 +80,44 @@
         <button class="button primary" id="add-confirm" type="submit">Dodaj</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="settings-dialog" class="settings" aria-labelledby="settings-title">
+    <h2 id="settings-title">Ustawienia</h2>
+
+    <section aria-labelledby="avatar-title">
+      <h3 id="avatar-title">Twoje zdjęcie</h3>
+      <div class="avatar-row">
+        <span class="avatar large" id="settings-avatar" aria-hidden="true"></span>
+        <div>
+          <p class="hint">Kontakty zobaczą je przy Twojej nazwie, gdy się z nimi połączysz.</p>
+          <div class="actions">
+            <label class="button" for="avatar-file">Wybierz zdjęcie</label>
+            <input class="visually-hidden" id="avatar-file" type="file" accept="image/*">
+            <button class="button" id="avatar-remove" type="button">Usuń</button>
+          </div>
+        </div>
+      </div>
+      <p class="error" id="avatar-error" role="alert" hidden></p>
+    </section>
+
+    <section aria-labelledby="theme-title">
+      <h3 id="theme-title">Motyw</h3>
+      <div class="themes" id="themes" role="radiogroup" aria-labelledby="theme-title"></div>
+    </section>
+
+    <section aria-labelledby="mode-title">
+      <h3 id="mode-title">Jasność</h3>
+      <div class="modes" role="radiogroup" aria-labelledby="mode-title">
+        <label><input type="radio" name="mode" value="system"> Jak w systemie</label>
+        <label><input type="radio" name="mode" value="light"> Jasny</label>
+        <label><input type="radio" name="mode" value="dark"> Ciemny</label>
+      </div>
+    </section>
+
+    <div class="dialog-actions">
+      <button class="button primary" type="button" data-close>Gotowe</button>
+    </div>
   </dialog>
 
   <dialog id="remove-dialog" aria-labelledby="remove-title">

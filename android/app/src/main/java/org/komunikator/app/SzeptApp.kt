@@ -11,6 +11,9 @@ import android.net.Network
 class SzeptApp : Application() {
     val messenger: Messenger by lazy { Messenger(this) }
 
+    /** Theme and brightness, shared by every screen. */
+    val appearance: Appearance by lazy { Appearance(this) }
+
     override fun onCreate() {
         super.onCreate()
         // Switching between Wi-Fi and mobile data changes the phone's

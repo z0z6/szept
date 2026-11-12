@@ -58,6 +58,10 @@ pub struct FileInfo {
     /// saved.
     pub path: Option<String>,
     pub reason: Option<String>,
+    /// "voice" or "gif" for media the app fetches on its own, else `None`.
+    pub media: Option<&'static str>,
+    /// Length of a voice message.
+    pub duration_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,6 +183,8 @@ impl Store {
     pub fn last_body(&self, peer: &str) -> Option<String> {
         let message = self.conversations.get(peer)?.last()?;
         let text = match &message.file {
+            Some(file) if file.media == Some("voice") => "🎤 Wiadomość głosowa".to_owned(),
+            Some(file) if file.media == Some("gif") => "GIF".to_owned(),
             Some(file) => format!("📎 {}", file.name),
             None => message.body.clone(),
         };

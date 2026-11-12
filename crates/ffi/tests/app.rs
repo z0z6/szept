@@ -5,7 +5,9 @@ use std::{
     time::Duration,
 };
 
-use komunikator_ffi::{App, ChatEvent, EventListener, normalize_id, qr_code, share_link};
+use komunikator_ffi::{
+    App, ChatEvent, EventListener, Media, max_avatar_len, normalize_id, qr_code, share_link,
+};
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -226,4 +228,76 @@ fn messages_keep_flowing_after_a_network_change() {
     }
     ala.stop();
     ola.stop();
+}
+
+#[test]
+fn voice_messages_arrive_on_their_own_and_avatars_follow_contacts() {
+    let (ala, _ala_events) = new_app();
+    let (ola, ola_events) = new_app();
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    ola.add_contact("ala".into(), ala.my_id()).unwrap();
+
+    // Set while offline: goes out with the first connection.
+    let picture = b"\xff\xd8\xff\xe0 a tiny jpeg".to_vec();
+    assert!(ala.set_avatar(b"<svg/>".to_vec()).is_err());
+    assert!(
+        ala.set_avatar(vec![0xff; max_avatar_len() as usize + 1])
+            .is_err()
+    );
+    ala.set_avatar(picture.clone()).unwrap();
+    assert_eq!(ala.my_avatar(), Some(picture.clone()));
+
+    let address = format!("127.0.0.1:{}", ola.listening_port());
+    ala.connect_direct(ola.my_id(), address).unwrap();
+    loop {
+        if let ChatEvent::AvatarChanged { peer } = ola_events.recv_timeout(WAIT).unwrap() {
+            assert_eq!(peer, ala.my_id());
+            break;
+        }
+    }
+    assert_eq!(ola.avatar(ala.my_id()), Some(picture));
+
+    let dir = std::env::temp_dir().join(format!("komunikator-ffi-voice-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("glosowa.m4a");
+    std::fs::write(&source, b"....ftypM4A and some sound").unwrap();
+    let media = Media::Voice { duration_ms: 3100 };
+    let sent = ala
+        .send_media(ola.my_id(), source.to_string_lossy().into_owned(), media)
+        .unwrap();
+
+    // No call to download: the app fetches voice messages by itself.
+    let saved = loop {
+        match ola_events.recv_timeout(WAIT).unwrap() {
+            ChatEvent::FileOffered { id, media: got, .. } => {
+                assert_eq!(id, sent.id);
+                assert_eq!(got, Some(media));
+            }
+            ChatEvent::FileSaved { id, path, .. } => {
+                assert_eq!(id, sent.id);
+                break path;
+            }
+            ChatEvent::FileFailed { reason, .. } => panic!("download failed: {reason}"),
+            _ => {}
+        }
+    };
+    assert!(saved.starts_with(&ola.media_dir()), "{saved}");
+    assert_eq!(
+        std::fs::read(&saved).unwrap(),
+        b"....ftypM4A and some sound"
+    );
+
+    // Removing the picture reaches the contact too.
+    ala.set_avatar(Vec::new()).unwrap();
+    assert_eq!(ala.my_avatar(), None);
+    loop {
+        if let ChatEvent::AvatarChanged { .. } = ola_events.recv_timeout(WAIT).unwrap() {
+            break;
+        }
+    }
+    assert_eq!(ola.avatar(ala.my_id()), None);
+
+    ala.stop();
+    ola.stop();
+    let _ = std::fs::remove_dir_all(dir);
 }

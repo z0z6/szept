@@ -10,14 +10,14 @@ use std::{
     time::Duration,
 };
 
-use komunikator_core::{EndpointAddr, EndpointId, Event, Node, Outgoing};
+use komunikator_core::{EndpointAddr, EndpointId, Event, Node, Outgoing, protocol::MAX_MEDIA_SIZE};
 use tokio::{
     sync::mpsc::{Receiver, UnboundedReceiver},
     task::JoinHandle,
     time::{MissedTickBehavior, interval},
 };
 
-use crate::{ChatEvent, EventListener, Offers};
+use crate::{ChatEvent, EventListener, Shared, download_task};
 
 /// How often offline contacts are dialled again.
 const RETRY_EVERY: Duration = Duration::from_secs(10);
@@ -32,6 +32,8 @@ pub(crate) enum Command {
     Dial(EndpointAddr),
     /// The device switched networks: look around and redial everyone now.
     NetworkChanged,
+    /// Our profile picture changed: send it to everyone connected.
+    AvatarChanged,
 }
 
 pub(crate) async fn run(
@@ -39,7 +41,7 @@ pub(crate) async fn run(
     mut events: Receiver<Event>,
     mut commands: UnboundedReceiver<Command>,
     listener: Arc<dyn EventListener>,
-    offers: Offers,
+    shared: Arc<Shared>,
     contacts: Vec<EndpointId>,
     dial_by_id: bool,
 ) {
@@ -80,25 +82,47 @@ pub(crate) async fn run(
                             }
                         }
                     }
+                    Command::AvatarChanged => {
+                        for peer in contacts.iter().filter(|peer| node.is_connected(peer)) {
+                            send_avatar(&node, *peer, &shared);
+                        }
+                    }
                 }
             }
             event = events.recv() => {
                 let Some(event) = event else { break };
-                let connected = match &event {
-                    Event::Connected { peer } => Some(*peer),
-                    Event::FileOffered { peer, id, offer, .. } => {
-                        offers
+                let mut connected = None;
+                let mut fetch = None;
+                match &event {
+                    Event::Connected { peer } => connected = Some(*peer),
+                    Event::FileOffered { peer, id, offer, media, .. } => {
+                        shared
+                            .offers
                             .lock()
                             .unwrap()
                             .insert(id.to_string(), (*peer, *id, offer.clone()));
-                        None
+                        // Voice messages and GIFs are fetched without asking.
+                        if media.is_some() && offer.size <= MAX_MEDIA_SIZE {
+                            fetch = Some(id.to_string());
+                        }
                     }
-                    _ => None,
-                };
+                    // Only a real change is worth redrawing for.
+                    Event::Avatar { peer, image } if !shared.store_avatar(peer, image) => continue,
+                    _ => {}
+                }
                 // Report the connection before the queued messages go out,
                 // so the interface sees "connected" ahead of "sent".
                 listener.on_event(event.into());
+                if let Some(id) = fetch {
+                    let dir = shared.media_dir.clone();
+                    if let Ok(Some(task)) =
+                        download_task(&shared, node.clone(), listener.clone(), id, dir)
+                    {
+                        tokio::spawn(task);
+                    }
+                }
                 if let Some(peer) = connected {
+                    send_avatar(&node, peer, &shared);
                     flush(&node, peer, &mut outbox, &*listener).await;
                 }
             }
@@ -111,6 +135,17 @@ pub(crate) async fn run(
             }
         }
     }
+}
+
+/// Sends our profile picture to a connected contact, in the background.
+/// Sent even when empty, so a contact learns that we removed it.
+fn send_avatar(node: &Node, peer: EndpointId, shared: &Shared) {
+    let image = shared.avatar.lock().unwrap().clone();
+    let node = node.clone();
+    tokio::spawn(async move {
+        // Failure means the connection just dropped; the next one retries.
+        let _ = node.send_avatar(peer, &image).await;
+    });
 }
 
 /// Starts connecting to a contact, unless connected or already trying.

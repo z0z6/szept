@@ -4,5 +4,7 @@
 <dict>
     <key>NSCameraUsageDescription</key>
     <string>Szept używa kamery tylko do skanowania kodu QR z identyfikatorem kontaktu.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Szept używa mikrofonu tylko do nagrywania wiadomości głosowych, gdy naciśniesz przycisk nagrywania.</string>
 </dict>
 </plist>

@@ -24,6 +24,16 @@ pub const MAX_TEXT_LEN: usize = 16 * 1024;
 /// Upper bound for the name of an offered file, in bytes.
 pub const MAX_FILE_NAME_LEN: usize = 255;
 
+/// Upper bound for a voice message or a GIF. The recipient's app fetches
+/// these on its own, so they must stay small.
+pub const MAX_MEDIA_SIZE: u64 = 16 * 1024 * 1024;
+
+/// Upper bound for the length of one voice message.
+pub const MAX_VOICE_MS: u32 = 30 * 60 * 1000;
+
+/// Upper bound for a profile picture, in bytes. It travels inside one frame.
+pub const MAX_AVATAR_LEN: usize = 48 * 1024;
+
 /// Random identifier of one message, chosen by the sender.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MessageId([u8; 16]);
@@ -73,11 +83,46 @@ impl fmt::Debug for MessageId {
     }
 }
 
+/// What a file offer is for, when it is more than a plain file.
+///
+/// Media are small files the recipient's app fetches right away and shows
+/// inside the conversation, instead of waiting for a tap on "download".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Media {
+    /// A recorded voice message.
+    Voice { duration_ms: u32 },
+    /// An animated picture or a sticker, usually inserted from the keyboard.
+    Gif,
+}
+
+impl Media {
+    /// Returns `true` if a file called `name` can carry this kind of media.
+    /// Pictures that can hold scripts, such as SVG, never pass.
+    pub fn accepts(&self, name: &str) -> bool {
+        let extension = name
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_ascii_lowercase())
+            .unwrap_or_default();
+        match self {
+            Self::Voice { duration_ms } => {
+                *duration_ms <= MAX_VOICE_MS
+                    && matches!(
+                        extension.as_str(),
+                        "m4a" | "aac" | "ogg" | "oga" | "opus" | "webm" | "mp3" | "wav"
+                    )
+            }
+            Self::Gif => matches!(extension.as_str(), "gif" | "webp" | "png" | "jpg" | "jpeg"),
+        }
+    }
+}
+
 /// What a message carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
     Text(String),
     File(FileOffer),
+    /// A voice message or a GIF: a file the recipient fetches at once.
+    Media(FileOffer, Media),
 }
 
 /// A message that is ready to be sent.
@@ -117,6 +162,16 @@ impl Outgoing {
         }
     }
 
+    /// Prepares an offer of a voice message or a GIF. See
+    /// [`crate::Node::share_media`].
+    pub(crate) fn media(offer: FileOffer, media: Media) -> Self {
+        Self {
+            id: MessageId::random(),
+            sent_at_ms: now_ms(),
+            content: Content::Media(offer, media),
+        }
+    }
+
     pub(crate) fn to_frame(&self) -> Frame {
         match &self.content {
             Content::Text(body) => Frame::Text {
@@ -128,6 +183,12 @@ impl Outgoing {
                 id: self.id,
                 sent_at_ms: self.sent_at_ms,
                 offer: offer.clone(),
+            },
+            Content::Media(offer, media) => Frame::Media {
+                id: self.id,
+                sent_at_ms: self.sent_at_ms,
+                offer: offer.clone(),
+                media: *media,
             },
         }
     }
@@ -153,6 +214,17 @@ pub(crate) enum Frame {
         sent_at_ms: u64,
         offer: FileOffer,
     },
+    /// Offers a voice message or a GIF, fetched like a file with the same
+    /// `id`. Older versions of Szept drop this frame unread.
+    Media {
+        id: MessageId,
+        sent_at_ms: u64,
+        offer: FileOffer,
+        media: Media,
+    },
+    /// The sender's profile picture (JPEG, PNG, WebP or GIF), or nothing
+    /// when they removed it. Sent on every new connection.
+    Avatar { image: Vec<u8> },
 }
 
 /// What the receiver of a file asks for on a fresh bidirectional stream: the
@@ -188,6 +260,18 @@ impl Frame {
             Self::File { offer, .. } => {
                 ensure!(crate::files::is_safe_name(&offer.name), "unsafe file name");
             }
+            Self::Media { offer, media, .. } => {
+                ensure!(crate::files::is_safe_name(&offer.name), "unsafe file name");
+                ensure!(offer.size <= MAX_MEDIA_SIZE, "media file is too large");
+                ensure!(media.accepts(&offer.name), "unexpected media file");
+            }
+            Self::Avatar { image } => {
+                ensure!(image.len() <= MAX_AVATAR_LEN, "picture is too large");
+                ensure!(
+                    image.is_empty() || crate::files::is_picture(image),
+                    "not a picture"
+                );
+            }
             Self::Ack { .. } => {}
         }
         Ok(frame)
@@ -213,10 +297,32 @@ mod tests {
             size: 7,
             hash: [9; 32],
         });
+        let voice = Outgoing::media(
+            FileOffer {
+                name: "glosowa.ogg".into(),
+                size: 3,
+                hash: [1; 32],
+            },
+            Media::Voice { duration_ms: 1500 },
+        );
+        let gif = Outgoing::media(
+            FileOffer {
+                name: "kot.gif".into(),
+                size: 3,
+                hash: [2; 32],
+            },
+            Media::Gif,
+        );
         for frame in [
             message.to_frame(),
             Frame::Ack { id: message.id },
             file.to_frame(),
+            voice.to_frame(),
+            gif.to_frame(),
+            Frame::Avatar {
+                image: b"\xff\xd8\xff\xe0 jpeg".to_vec(),
+            },
+            Frame::Avatar { image: Vec::new() },
         ] {
             assert_eq!(Frame::decode(&frame.encode().unwrap()).unwrap(), frame);
         }
@@ -259,6 +365,46 @@ mod tests {
             let bytes = postcard::to_stdvec(&frame).unwrap();
             assert!(Frame::decode(&bytes).is_err(), "{name} was accepted");
         }
+    }
+
+    #[test]
+    fn media_must_be_small_and_of_the_right_type() {
+        let media = |name: &str, size: u64, media: Media| {
+            let frame = Frame::Media {
+                id: MessageId::random(),
+                sent_at_ms: 0,
+                offer: FileOffer {
+                    name: name.into(),
+                    size,
+                    hash: [0; 32],
+                },
+                media,
+            };
+            Frame::decode(&postcard::to_stdvec(&frame).unwrap())
+        };
+        let voice = Media::Voice { duration_ms: 10 };
+        assert!(media("a.m4a", 10, voice).is_ok());
+        assert!(media("a.webm", 10, voice).is_ok());
+        assert!(media("a.gif", 10, Media::Gif).is_ok());
+        assert!(media("a.exe", 10, voice).is_err());
+        assert!(media("a.svg", 10, Media::Gif).is_err());
+        assert!(media("a.gif", MAX_MEDIA_SIZE + 1, Media::Gif).is_err());
+        let endless = Media::Voice {
+            duration_ms: MAX_VOICE_MS + 1,
+        };
+        assert!(media("a.ogg", 10, endless).is_err());
+    }
+
+    #[test]
+    fn avatars_must_be_small_pictures() {
+        let decode =
+            |image: Vec<u8>| Frame::decode(&postcard::to_stdvec(&Frame::Avatar { image }).unwrap());
+        assert!(decode(Vec::new()).is_ok());
+        assert!(decode(b"\x89PNG\r\n\x1a\n....".to_vec()).is_ok());
+        assert!(decode(b"<svg onload=alert(1)>".to_vec()).is_err());
+        let mut huge = b"\xff\xd8\xff".to_vec();
+        huge.resize(MAX_AVATAR_LEN + 1, 0);
+        assert!(decode(huge).is_err());
     }
 
     #[test]
