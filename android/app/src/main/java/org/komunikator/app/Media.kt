@@ -297,7 +297,13 @@ fun MediaContent(file: FileItem, onRetry: () -> Unit) {
                 if (file.media == "voice") "Wiadomość głosowa, ${formatDuration(file.durationMs)}" else "GIF",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            if (file.transfer == Transfer.FAILED) {
+            if (file.transfer == Transfer.ARCHIVED) {
+                Text(
+                    "Z archiwum, bez zawartości.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (file.transfer == Transfer.FAILED) {
                 Text(
                     "Nie udało się pobrać. Nadawca musi mieć Szept włączony.",
                     style = MaterialTheme.typography.bodySmall,

@@ -33,8 +33,9 @@ use crate::{
     files,
     identity::Identity,
     protocol::{
-        ALPN, FETCH_GONE, FETCH_OK, FETCH_UNKNOWN, FetchRequest, FileOffer, Frame, MAX_AVATAR_LEN,
-        MAX_FRAME_LEN, MAX_MEDIA_SIZE, Media, MessageId, Outgoing,
+        ALPN, FETCH_GONE, FETCH_OK, FETCH_UNKNOWN, FetchRequest, FileOffer, Frame, GroupId,
+        GroupInfo, MAX_AVATAR_LEN, MAX_FRAME_LEN, MAX_MEDIA_SIZE, Media, MessageId, Outgoing, Post,
+        Signal,
     },
 };
 
@@ -101,12 +102,35 @@ pub enum Event {
     /// A contact sent their profile picture: a JPEG, PNG, WebP or GIF of at
     /// most [`MAX_AVATAR_LEN`] bytes, or nothing when they removed it.
     Avatar { peer: EndpointId, image: Vec<u8> },
+    /// A contact sent a post: a message for a group, or a sticker. A file
+    /// in a post is fetched with [`Node::download`] like any other.
+    Post {
+        peer: EndpointId,
+        id: MessageId,
+        sent_at_ms: u64,
+        group: Option<GroupId>,
+        post: Post,
+    },
+    /// A contact reacted to the message `target`; empty means taken back.
+    Reaction {
+        peer: EndpointId,
+        target: MessageId,
+        group: Option<GroupId>,
+        reaction: String,
+    },
+    /// A group's owner sent its state. Check that `peer` is the owner.
+    Group { peer: EndpointId, info: GroupInfo },
+    /// A contact left a group.
+    Left { peer: EndpointId, group: GroupId },
+    /// A contact sent their display name.
+    Name { peer: EndpointId, name: String },
 }
 
 /// A file this device offered to a contact.
 #[derive(Debug, Clone)]
 struct Share {
-    peer: EndpointId,
+    /// Who may fetch it: one contact, or the members of a group.
+    peers: Vec<EndpointId>,
     path: PathBuf,
     offer: FileOffer,
 }
@@ -255,6 +279,53 @@ impl Node {
         self.share_as(peer, path, Some(media)).await
     }
 
+    /// Offers a file, or a voice message or GIF when `media` is set, as a
+    /// post that every one of `peers` may fetch: the members of `group`.
+    pub async fn share_post(
+        &self,
+        peers: Vec<EndpointId>,
+        group: Option<GroupId>,
+        path: &Path,
+        media: Option<Media>,
+    ) -> Result<Outgoing> {
+        let path = path.to_owned();
+        let offer = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || files::describe(&path)
+        })
+        .await??;
+        if let Some(media) = media {
+            ensure!(offer.size <= MAX_MEDIA_SIZE, "the media file is too large");
+            ensure!(
+                media.accepts(&offer.name),
+                "this file cannot be sent as media"
+            );
+        }
+        let message = Outgoing::post_unchecked(
+            group,
+            Post::File {
+                offer: offer.clone(),
+                media,
+            },
+        );
+        self.inner
+            .shares
+            .lock()
+            .unwrap()
+            .insert(message.id, Share { peers, path, offer });
+        Ok(message)
+    }
+
+    /// Sends a reaction, a group change or a name to a contact, connecting
+    /// first if necessary.
+    pub async fn signal(&self, peer: EndpointId, signal: &Signal) -> Result<()> {
+        let conn = match self.inner.live_connection(&peer) {
+            Some(conn) => conn,
+            None => self.dial(peer.into()).await?,
+        };
+        write_frame(&conn, &signal.to_frame()).await
+    }
+
     async fn share_as(
         &self,
         peer: EndpointId,
@@ -278,11 +349,14 @@ impl Node {
                 Outgoing::media(offer.clone(), media)
             }
         };
-        self.inner
-            .shares
-            .lock()
-            .unwrap()
-            .insert(message.id, Share { peer, path, offer });
+        self.inner.shares.lock().unwrap().insert(
+            message.id,
+            Share {
+                peers: vec![peer],
+                path,
+                offer,
+            },
+        );
         Ok(message)
     }
 
@@ -541,6 +615,40 @@ impl Inner {
                     .await;
             }
             Frame::Avatar { image } => self.emit(Event::Avatar { peer, image }).await,
+            Frame::Post {
+                id,
+                sent_at_ms,
+                group,
+                post,
+            } => {
+                self.emit(Event::Post {
+                    peer,
+                    id,
+                    sent_at_ms,
+                    group,
+                    post,
+                })
+                .await;
+                if let Err(err) = write_frame(conn, &Frame::Ack { id }).await {
+                    debug!(%peer, "cannot confirm post {id}: {err}");
+                }
+            }
+            Frame::React {
+                target,
+                group,
+                reaction,
+            } => {
+                self.emit(Event::Reaction {
+                    peer,
+                    target,
+                    group,
+                    reaction,
+                })
+                .await;
+            }
+            Frame::Group { info } => self.emit(Event::Group { peer, info }).await,
+            Frame::Leave { group } => self.emit(Event::Left { peer, group }).await,
+            Frame::Name { name } => self.emit(Event::Name { peer, name }).await,
         }
     }
 
@@ -595,7 +703,7 @@ impl Inner {
             .lock()
             .unwrap()
             .get(&request.id)
-            .filter(|share| share.peer == peer)
+            .filter(|share| share.peers.contains(&peer))
             .cloned();
         let Some(share) = share else {
             send.write_all(&[FETCH_UNKNOWN]).await?;

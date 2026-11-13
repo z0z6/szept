@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use komunikator_core::{
     Contacts, EndpointAddr, EndpointId, Event, FileOffer, Identity, Media, MessageId, Network,
-    Node, Outgoing, contacts, identity,
+    Node, Outgoing, Post, contacts, identity,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -265,8 +265,20 @@ async fn chat(
                             offers.len()
                         );
                     }
-                    // The terminal cannot show pictures.
-                    Event::Avatar { .. } => {}
+                    Event::Post { peer: who, post: Post::Text(body), group: None, .. } => {
+                        println!("[{}] {}", name(contacts, &who), printable(&body));
+                    }
+                    Event::Post { peer: who, post: Post::Sticker(code), group: None, .. } => {
+                        println!("[{}] (naklejka: {code})", name(contacts, &who));
+                    }
+                    // The terminal client shows one conversation, without
+                    // groups, pictures or reactions.
+                    Event::Avatar { .. }
+                    | Event::Post { .. }
+                    | Event::Reaction { .. }
+                    | Event::Group { .. }
+                    | Event::Left { .. }
+                    | Event::Name { .. } => {}
                 }
             }
             _ = retry.tick() => {

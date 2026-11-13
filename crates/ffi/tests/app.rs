@@ -301,3 +301,293 @@ fn voice_messages_arrive_on_their_own_and_avatars_follow_contacts() {
     ola.stop();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Waits for the first event `pick` accepts, skipping the others.
+fn wait_for<T>(
+    events: &mpsc::Receiver<ChatEvent>,
+    mut pick: impl FnMut(ChatEvent) -> Option<T>,
+) -> T {
+    let deadline = std::time::Instant::now() + WAIT;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let event = events.recv_timeout(left).expect("the event never came");
+        if let Some(found) = pick(event) {
+            return found;
+        }
+    }
+}
+
+fn dial(from: &App, to: &App) {
+    let address = format!("127.0.0.1:{}", to.listening_port());
+    from.connect_direct(to.my_id(), address).unwrap();
+}
+
+#[test]
+fn groups_reach_members_who_are_not_contacts() {
+    let (ala, ala_events) = new_app();
+    let (ola, ola_events) = new_app();
+    let (ela, ela_events) = new_app();
+    // Ala knows both; Ola and Ela do not know each other.
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    ala.add_contact("ela".into(), ela.my_id()).unwrap();
+    ola.add_contact("ala".into(), ala.my_id()).unwrap();
+    ela.add_contact("ala".into(), ala.my_id()).unwrap();
+    ala.set_name("Ala".into()).unwrap();
+    assert!(ala.create_group("Nikt".into(), vec![]).is_err());
+
+    let group = ala
+        .create_group("Wycieczka".into(), vec![ola.my_id(), ela.my_id()])
+        .unwrap();
+    assert!(group.mine);
+    assert_eq!(group.members.len(), 3);
+    dial(&ala, &ola);
+    dial(&ala, &ela);
+    for events in [&ola_events, &ela_events] {
+        let id = wait_for(events, |event| match event {
+            ChatEvent::GroupChanged { group } => Some(group),
+            _ => None,
+        });
+        assert_eq!(id, group.id);
+    }
+    assert_eq!(ola.groups()[0].name, "Wycieczka");
+    assert!(!ola.groups()[0].mine);
+    assert_eq!(ola.display_name(ala.my_id()).as_deref(), Some("Ala"));
+
+    // Ola writes to the group; Ela gets it straight from her.
+    dial(&ola, &ela);
+    let sent = ola
+        .send(group.id.clone(), "Kto bierze kanapki?".into())
+        .unwrap();
+    let (author, body) = wait_for(&ela_events, |event| match event {
+        ChatEvent::Message {
+            peer,
+            body,
+            group: Some(g),
+            ..
+        } if g == group.id => Some((peer, body)),
+        _ => None,
+    });
+    assert_eq!(
+        (author, body.as_str()),
+        (ola.my_id(), "Kto bierze kanapki?")
+    );
+    wait_for(&ala_events, |event| match event {
+        ChatEvent::Message { id, .. } if id == sent => Some(()),
+        _ => None,
+    });
+    wait_for(&ola_events, |event| match event {
+        ChatEvent::Delivered {
+            id, group: Some(g), ..
+        } if id == sent && g == group.id => Some(()),
+        _ => None,
+    });
+
+    // A reaction and a sticker.
+    ela.react(group.id.clone(), sent.clone(), "pierog".into())
+        .unwrap();
+    let (target, reaction) = wait_for(&ola_events, |event| match event {
+        ChatEvent::Reaction {
+            target,
+            reaction,
+            peer,
+            ..
+        } if peer == ela.my_id() => Some((target, reaction)),
+        _ => None,
+    });
+    assert_eq!((target, reaction.as_str()), (sent.clone(), "pierog"));
+    assert!(
+        ela.react(group.id.clone(), sent, "Zła Reakcja".into())
+            .is_err()
+    );
+    ela.send_sticker(group.id.clone(), "ogorek".into()).unwrap();
+    let code = wait_for(&ala_events, |event| match event {
+        ChatEvent::Sticker {
+            code,
+            group: Some(_),
+            ..
+        } => Some(code),
+        _ => None,
+    });
+    assert_eq!(code, "ogorek");
+
+    // Only the owner changes the group; Ela is taken out.
+    assert!(
+        ola.update_group(group.id.clone(), "Moja".into(), vec![])
+            .is_err()
+    );
+    ala.update_group(group.id.clone(), "Wycieczka 2".into(), vec![ola.my_id()])
+        .unwrap();
+    let reason = wait_for(&ela_events, |event| match event {
+        ChatEvent::GroupClosed { reason, .. } => Some(reason),
+        _ => None,
+    });
+    assert_eq!(reason, "removed");
+    assert!(ela.groups().is_empty());
+    wait_for(&ola_events, |event| match event {
+        ChatEvent::GroupChanged { .. } => Some(()),
+        _ => None,
+    });
+    assert_eq!(ola.groups()[0].name, "Wycieczka 2");
+
+    // The owner leaving closes the group.
+    ala.leave_group(group.id.clone()).unwrap();
+    let reason = wait_for(&ola_events, |event| match event {
+        ChatEvent::GroupClosed { reason, .. } => Some(reason),
+        _ => None,
+    });
+    assert_eq!(reason, "closed");
+
+    for app in [ala, ola, ela] {
+        app.stop();
+    }
+}
+
+#[test]
+fn a_contact_can_move_to_a_new_key() {
+    let (ala, _ala_events) = new_app();
+    let (ola, _ola_events) = new_app();
+    let (new_ola, new_ola_events) = new_app();
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    new_ola.add_contact("ala".into(), ala.my_id()).unwrap();
+
+    assert!(ala.update_contact_key("ola".into(), ala.my_id()).is_err());
+    assert!(
+        ala.update_contact_key("nikt".into(), new_ola.my_id())
+            .is_err()
+    );
+    let old = ala
+        .update_contact_key("ola".into(), new_ola.my_id())
+        .unwrap();
+    assert_eq!(old, ola.my_id());
+    assert_eq!(ala.contacts()[0].id, new_ola.my_id());
+
+    // The new key works right away.
+    ala.send(new_ola.my_id(), "Witaj z powrotem".into())
+        .unwrap();
+    dial(&ala, &new_ola);
+    let body = wait_for(&new_ola_events, |event| match event {
+        ChatEvent::Message { body, .. } => Some(body),
+        _ => None,
+    });
+    assert_eq!(body, "Witaj z powrotem");
+    for app in [ala, ola, new_ola] {
+        app.stop();
+    }
+}
+
+#[test]
+fn an_archive_brings_back_identity_contacts_and_conversations() {
+    use komunikator_ffi::{
+        ArchivedConversation, ArchivedMessage, ArchivedReaction, import_archive,
+    };
+
+    let dir = std::env::temp_dir().join(format!("komunikator-arch-{}", rand::random::<u64>()));
+    let (ala, _events) = new_app();
+    let (ola, _ola_events) = new_app();
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    ala.set_name("Ala".into()).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let voice = dir.join("glosowa.m4a");
+    std::fs::write(&voice, b"....ftypM4A sound").unwrap();
+    let conversation = ArchivedConversation {
+        key: ola.my_id(),
+        messages: vec![ArchivedMessage {
+            id: "00112233445566778899aabbccddeeff".into(),
+            author: String::new(),
+            at_ms: 1,
+            kind: "file".into(),
+            body: String::new(),
+            file_name: Some("glosowa.m4a".into()),
+            file_size: 17,
+            file_hash: None,
+            media: Some(Media::Voice { duration_ms: 1200 }),
+            file_path: Some(voice.to_string_lossy().into_owned()),
+            status: "delivered".into(),
+            reactions: vec![ArchivedReaction {
+                who: ola.my_id(),
+                reaction: "kapec".into(),
+            }],
+        }],
+    };
+    let archive = dir.join("szept.szarch");
+    let archive_text = archive.to_string_lossy().into_owned();
+    assert!(
+        ala.export_archive(
+            archive_text.clone(),
+            "krótkie".into(),
+            true,
+            vec![],
+            Default::default()
+        )
+        .is_err()
+    );
+    // Long but easy to guess: refused.
+    assert!(
+        ala.export_archive(
+            archive_text.clone(),
+            "qwerty123456".into(),
+            true,
+            vec![],
+            Default::default()
+        )
+        .is_err()
+    );
+    let preferences = [
+        ("theme".to_owned(), "las".to_owned()),
+        ("zły klucz!".to_owned(), "x".to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    ala.export_archive(
+        archive_text.clone(),
+        "zielony-most-pada-rzeka-17".into(),
+        true,
+        vec![conversation],
+        preferences,
+    )
+    .unwrap();
+
+    // A fresh install: a new identity, nothing else.
+    let fresh = dir.join("fresh");
+    let reinstalled = App::new(fresh.to_string_lossy().into_owned(), true).unwrap();
+    assert_ne!(reinstalled.my_id(), ala.my_id());
+    drop(reinstalled);
+
+    let fresh_text = fresh.to_string_lossy().into_owned();
+    assert!(
+        import_archive(
+            fresh_text.clone(),
+            archive_text.clone(),
+            "złe hasło".into(),
+            true
+        )
+        .is_err()
+    );
+    let imported = import_archive(
+        fresh_text.clone(),
+        archive_text,
+        "zielony-most-pada-rzeka-17".into(),
+        true,
+    )
+    .unwrap();
+    assert!(imported.identity_restored);
+    // Only well-formed preferences come back.
+    assert_eq!(imported.preferences.len(), 1);
+    assert_eq!(
+        imported.preferences.get("theme").map(String::as_str),
+        Some("las")
+    );
+    assert_eq!(imported.contacts_added, 1);
+    let message = &imported.conversations[0].messages[0];
+    assert_eq!(message.reactions[0].reaction, "kapec");
+    let restored = message.file_path.clone().unwrap();
+    assert_eq!(std::fs::read(&restored).unwrap(), b"....ftypM4A sound");
+
+    let back = App::new(fresh_text, true).unwrap();
+    assert_eq!(back.my_id(), ala.my_id());
+    assert_eq!(back.contacts()[0].id, ola.my_id());
+    assert_eq!(back.my_name(), "Ala");
+    ala.stop();
+    ola.stop();
+    let _ = std::fs::remove_dir_all(dir);
+}

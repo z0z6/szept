@@ -75,7 +75,12 @@ const STATUS_COLORS = {
 
 const THEME_KEY = "szept.theme";
 const MODE_KEY = "szept.mode";
+const SIZE_KEY = "szept.textSize";
 const MODES = ["system", "light", "dark"];
+
+// Text sizes, as a share of the system's own size. The Android app uses the
+// same names, so an archive or settings file carries the choice across.
+const TEXT_SIZES = { small: 0.9, normal: 1, large: 1.125, xlarge: 1.25 };
 
 function readSetting(key, fallback) {
   try {
@@ -98,6 +103,11 @@ function currentTheme() {
   return THEMES.find((theme) => theme.id === id) || THEMES[0];
 }
 
+function currentTextSize() {
+  const size = readSetting(SIZE_KEY, "normal");
+  return Object.hasOwn(TEXT_SIZES, size) ? size : "normal";
+}
+
 function currentMode() {
   const mode = readSetting(MODE_KEY, "system");
   return MODES.includes(mode) ? mode : "system";
@@ -116,6 +126,7 @@ function applyTheme() {
   const root = document.documentElement.style;
   for (const [name, value] of Object.entries(colors)) root.setProperty(`--${name}`, value);
   root.setProperty("color-scheme", dark ? "dark" : "light");
+  root.setProperty("font-size", `${TEXT_SIZES[currentTextSize()] * 100}%`);
 }
 
 // Every open window follows a change made in any of them.
@@ -131,9 +142,53 @@ function chooseMode(mode) {
   window.__TAURI__?.event.emit("theme").catch(() => {});
 }
 
+function chooseTextSize(size) {
+  writeSetting(SIZE_KEY, size);
+  applyTheme();
+  window.__TAURI__?.event.emit("theme").catch(() => {});
+}
+
+// Preferences as they travel in archives and settings files: the same keys
+// and values on every platform. Unknown ones are ignored.
+const SOUNDS_SETTING = "szept.sounds";
+
+function collectPreferences() {
+  return {
+    theme: currentTheme().id,
+    mode: currentMode(),
+    text_size: currentTextSize(),
+    sounds: readSetting(SOUNDS_SETTING, "on") === "off" ? "off" : "on",
+  };
+}
+
+// Returns how many preferences were applied.
+function applyPreferences(preferences) {
+  let applied = 0;
+  const value = (key) => (typeof preferences?.[key] === "string" ? preferences[key] : null);
+  if (THEMES.some((theme) => theme.id === value("theme"))) {
+    writeSetting(THEME_KEY, value("theme"));
+    applied += 1;
+  }
+  if (MODES.includes(value("mode"))) {
+    writeSetting(MODE_KEY, value("mode"));
+    applied += 1;
+  }
+  if (Object.hasOwn(TEXT_SIZES, value("text_size") ?? "")) {
+    writeSetting(SIZE_KEY, value("text_size"));
+    applied += 1;
+  }
+  if (["on", "off"].includes(value("sounds"))) {
+    writeSetting(SOUNDS_SETTING, value("sounds"));
+    applied += 1;
+  }
+  applyTheme();
+  window.__TAURI__?.event.emit("theme").catch(() => {});
+  return applied;
+}
+
 applyTheme();
 darkQuery.addEventListener("change", applyTheme);
 window.addEventListener("storage", (event) => {
-  if (event.key === THEME_KEY || event.key === MODE_KEY) applyTheme();
+  if ([THEME_KEY, MODE_KEY, SIZE_KEY].includes(event.key)) applyTheme();
 });
 window.__TAURI__?.event.listen("theme", applyTheme);

@@ -252,14 +252,151 @@ async function refresh() {
     $("record").disabled = true;
     return;
   }
+  chatData = data;
   document.title = `${data.alias} – Szept`;
   $("alias").textContent = data.alias;
-  fillAvatar($("avatar"), data.alias, data.avatar);
+  if (data.group) {
+    $("avatar").textContent = [...data.alias][0] || "#";
+    $("avatar").classList.add("group-avatar");
+    const online = data.members.filter((member) => member.online).length;
+    $("presence").textContent = `${data.members.length} osób, połączonych: ${online}`;
+    $("members-open").hidden = false;
+  } else {
+    fillAvatar($("avatar"), data.alias, data.avatar);
+    $("presence").textContent = data.online
+      ? "Połączony"
+      : "Niepołączony. Wiadomości wyjdą, gdy kontakt się pojawi.";
+  }
   $("avatar").dataset.online = String(data.online);
-  $("presence").textContent = data.online
-    ? "Połączony"
-    : "Niepołączony. Wiadomości wyjdą, gdy kontakt się pojawi.";
   renderMessages(data.messages, data.alias);
+}
+
+let chatData = null;
+
+// Who someone is in this conversation.
+function personName(id) {
+  if (!chatData) return "";
+  if (id === chatData.my_id) return "Ty";
+  if (!chatData.group) return chatData.alias;
+  return chatData.members.find((member) => member.id === id)?.name ?? "Ktoś spoza grupy";
+}
+
+function authorAvatar(id) {
+  const member = chatData?.members.find((person) => person.id === id);
+  const node = el("span", { class: "avatar tiny", "aria-hidden": "true" });
+  fillAvatar(node, member?.name ?? "?", member?.avatar);
+  return node;
+}
+
+// Reactions under a message: one chip per kind, with who chose it.
+function reactionRow(message) {
+  const counts = new Map();
+  for (const [who, code] of Object.entries(message.reactions || {})) {
+    if (!FIGURES[code]) continue;
+    if (!counts.has(code)) counts.set(code, []);
+    counts.get(code).push(who);
+  }
+  const mine = message.reactions?.[chatData?.my_id];
+  const chips = [...counts.entries()].map(([code, people]) => {
+    const names = people.map(personName).join(", ");
+    const svg = figureSvg(code, 22, { animate: false });
+    const chip = el(
+      "button",
+      {
+        class: `reaction${code === mine ? " own" : ""}`,
+        type: "button",
+        title: `${figureName(code)}: ${names}`,
+        "aria-label": `${figureName(code)}, ${people.length}: ${names}`,
+        onclick: () => react(message.id, code === mine ? "" : code),
+      },
+      svg,
+      people.length > 1 ? el("span", { text: String(people.length) }) : "",
+    );
+    chip.addEventListener("mouseenter", () => svg.unpauseAnimations?.());
+    chip.addEventListener("mouseleave", () => svg.pauseAnimations?.());
+    return chip;
+  });
+  const add = el("button", {
+    class: "react-add",
+    type: "button",
+    title: "Zareaguj",
+    "aria-label": "Zareaguj na wiadomość",
+    text: "＋",
+    onclick: (event) => {
+      event.stopPropagation();
+      openPalette(add, message.id, mine);
+    },
+  });
+  return el("div", { class: "reactions" }, ...chips, add);
+}
+
+async function react(id, reaction) {
+  try {
+    await invoke("react", { peer, id, reaction });
+  } catch (err) {
+    showProblem(friendly(err));
+  }
+}
+
+// The palette of Szeptusie, next to the message.
+const palette = el("div", { class: "palette", role: "menu", hidden: "" });
+document.body.append(palette);
+
+function openPalette(anchor, id, mine) {
+  palette.replaceChildren(
+    ...REACTIONS.map((code) =>
+      el(
+        "button",
+        {
+          class: `palette-item${code === mine ? " own" : ""}`,
+          type: "button",
+          role: "menuitem",
+          title: figureName(code),
+          "aria-label": figureName(code),
+          onclick: () => {
+            closePalette();
+            react(id, code === mine ? "" : code);
+          },
+        },
+        figureSvg(code, 36),
+      ),
+    ),
+  );
+  palette.hidden = false;
+  const box = anchor.getBoundingClientRect();
+  const width = palette.offsetWidth;
+  const left = Math.max(8, Math.min(window.innerWidth - width - 8, box.left - width / 2));
+  const top = box.top - palette.offsetHeight - 8;
+  palette.style.left = `${left}px`;
+  palette.style.top = `${top < 8 ? box.bottom + 8 : top}px`;
+  palette.querySelector("button")?.focus();
+}
+
+function closePalette() {
+  palette.hidden = true;
+}
+
+document.addEventListener("click", (event) => {
+  if (!palette.hidden && !palette.contains(event.target)) closePalette();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !palette.hidden) closePalette();
+});
+
+function stickerContent(message) {
+  const key = `sticker:${message.id}`;
+  let node = mediaCache.get(key);
+  if (!node) {
+    const label = `Naklejka: ${stickerCaption(message.sticker)}`;
+    node = el(
+      "figure",
+      { class: "sticker" },
+      figureSvg(message.sticker, 128, { label }),
+      el("figcaption", { text: stickerCaption(message.sticker) }),
+    );
+    mediaCache.set(key, node);
+  }
+  return node;
 }
 
 function renderMessages(messages, alias) {
@@ -279,7 +416,12 @@ function renderMessages(messages, alias) {
     }
     const fresh = !firstRender && !shown.has(message.id);
     shown.add(message.id);
+    if (message.system) {
+      nodes.push(el("p", { class: "note", text: message.body }));
+      return;
+    }
     const classes = ["bubble", message.mine ? "mine" : "theirs"];
+    if (message.sticker) classes.push("sticker-bubble");
     if (!message.file && onlyEmoji(message.body)) classes.push("big-emoji");
     if (message.file?.media) classes.push(`media-${message.file.media}`);
     if (fresh) classes.push("fresh");
@@ -298,12 +440,22 @@ function renderMessages(messages, alias) {
       tick.innerHTML = status.svg;
       meta.append(tick);
     }
-    const content = message.file?.media
-      ? mediaContent(message)
-      : message.file
-        ? fileCard(message, alias)
-        : el("div", { class: "body", text: message.body });
-    nodes.push(el("div", { class: classes.join(" ") }, content, meta));
+    const content = message.sticker
+      ? stickerContent(message)
+      : message.file?.media
+        ? mediaContent(message)
+        : message.file
+          ? fileCard(message, alias)
+          : el("div", { class: "body", text: message.body });
+    const bubble = el("div", { class: classes.join(" ") });
+    if (chatData?.group && !message.mine && message.author) {
+      bubble.append(el("span", { class: "author", text: personName(message.author) }));
+    }
+    bubble.append(content, meta);
+    const row = el("div", { class: `row ${message.mine ? "mine" : "theirs"}` });
+    if (chatData?.group && !message.mine) row.append(authorAvatar(message.author));
+    row.append(el("div", { class: "stack" }, bubble, reactionRow(message)));
+    nodes.push(row);
   });
 
   if (messages.length === 0) {
@@ -313,6 +465,126 @@ function renderMessages(messages, alias) {
   if (firstRender || nearBottom) box.scrollTop = box.scrollHeight;
   firstRender = false;
 }
+
+// Stickers
+const stickerPanel = $("sticker-panel");
+$("sticker-toggle").append(figureSvg("pierog", 24, { animate: false }));
+$("sticker-grid").append(
+  ...STICKERS.map((code) =>
+    el(
+      "button",
+      {
+        class: "sticker-choice",
+        type: "button",
+        title: stickerCaption(code),
+        "aria-label": `Wyślij naklejkę: ${stickerCaption(code)}`,
+        onclick: () => sendSticker(code),
+      },
+      figureSvg(code, 64),
+      el("span", { text: stickerCaption(code) }),
+    ),
+  ),
+);
+
+async function sendSticker(code) {
+  stickerPanel.hidden = true;
+  $("sticker-toggle").setAttribute("aria-expanded", "false");
+  try {
+    await invoke("send_sticker", { peer, code });
+    showProblem("");
+  } catch (err) {
+    showProblem(friendly(err));
+  }
+}
+
+$("sticker-toggle").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const open = stickerPanel.hidden;
+  closeEmoji();
+  stickerPanel.hidden = !open;
+  $("sticker-toggle").setAttribute("aria-expanded", String(open));
+});
+document.addEventListener("click", (event) => {
+  if (!stickerPanel.hidden && !stickerPanel.contains(event.target)) {
+    stickerPanel.hidden = true;
+    $("sticker-toggle").setAttribute("aria-expanded", "false");
+  }
+});
+
+// Group members and settings
+const membersDialog = $("members-dialog");
+
+for (const button of document.querySelectorAll("[data-close]")) {
+  button.addEventListener("click", () => button.closest("dialog").close());
+}
+
+$("members-open").addEventListener("click", async () => {
+  if (!chatData?.group) return;
+  $("members-error").hidden = true;
+  const owner = chatData.mine;
+  $("group-name").value = chatData.alias;
+  $("group-name").readOnly = !owner;
+  $("members-save").hidden = !owner;
+  $("leave-group").textContent = owner ? "Zamknij grupę" : "Opuść grupę";
+  $("members-hint").textContent = owner
+    ? "Możesz dodać swoje kontakty albo odznaczyć osoby, które mają wyjść z grupy."
+    : "Członków zmienia właściciel grupy.";
+  let contacts = [];
+  if (owner) {
+    try {
+      contacts = (await invoke("overview")).contacts;
+    } catch {
+      contacts = [];
+    }
+  }
+  const rows = chatData.members
+    .filter((member) => member.id !== chatData.my_id)
+    .map((member) => ({ id: member.id, name: member.name, inside: true, online: member.online }));
+  for (const contact of contacts) {
+    if (!rows.some((row) => row.id === contact.id)) {
+      rows.push({ id: contact.id, name: contact.alias, inside: false, online: contact.online });
+    }
+  }
+  $("member-list").replaceChildren(
+    el("p", { class: "member-me", text: owner ? "Ty (właściciel)" : "Ty" }),
+    ...rows.map((row) =>
+      owner
+        ? el(
+            "label",
+            { class: "check" },
+            el("input", { type: "checkbox", value: row.id, ...(row.inside ? { checked: "" } : {}) }),
+            el("span", { text: `${row.name}${row.online ? " · połączony" : ""}` }),
+          )
+        : el("p", { text: `${row.name}${row.online ? " · połączony" : ""}` }),
+    ),
+  );
+  membersDialog.showModal();
+});
+
+$("members-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const members = [...$("member-list").querySelectorAll("input:checked")].map((input) => input.value);
+  try {
+    await invoke("update_group", { group: peer, name: $("group-name").value.trim(), members });
+    membersDialog.close();
+  } catch (err) {
+    $("members-error").textContent = friendly(err);
+    $("members-error").hidden = false;
+  }
+});
+
+$("leave-group").addEventListener("click", async () => {
+  const question = chatData?.mine
+    ? "Zamknąć grupę dla wszystkich? Rozmowa zniknie."
+    : "Opuścić grupę? Rozmowa zniknie z tego komputera.";
+  if (!confirm(question)) return;
+  try {
+    await invoke("leave_group", { group: peer });
+  } catch (err) {
+    $("members-error").textContent = friendly(err);
+    $("members-error").hidden = false;
+  }
+});
 
 let pending = false;
 listen("changed", (event) => {

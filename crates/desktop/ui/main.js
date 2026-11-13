@@ -4,6 +4,7 @@
 const $ = (id) => document.getElementById(id);
 let myId = "";
 let myAvatar = null;
+let lastContacts = [];
 
 $("logo").innerHTML = LOGO;
 
@@ -19,7 +20,10 @@ async function refresh() {
     fillAvatar($("my-avatar"), "", myAvatar);
     fillAvatar($("settings-avatar"), "", myAvatar);
     $("avatar-remove").hidden = !myAvatar;
+    if (document.activeElement !== $("my-name")) $("my-name").value = data.my_name;
+    lastContacts = data.contacts;
     renderContacts(data.contacts);
+    renderGroups(data.groups);
     $("status").textContent = "";
   } catch (err) {
     $("status").textContent = friendly(err);
@@ -61,6 +65,14 @@ function renderContacts(contacts) {
         el("button", {
           class: "icon-button remove",
           type: "button",
+          title: "Nowy klucz kontaktu (po ponownej instalacji)",
+          "aria-label": `Zaktualizuj klucz kontaktu ${contact.alias}`,
+          text: "🔑",
+          onclick: () => askKey(contact.alias),
+        }),
+        el("button", {
+          class: "icon-button remove",
+          type: "button",
           title: "Usuń kontakt",
           "aria-label": `Usuń kontakt ${contact.alias}`,
           text: "✕",
@@ -70,6 +82,37 @@ function renderContacts(contacts) {
     }),
   );
   $("no-contacts").hidden = contacts.length > 0;
+}
+
+function renderGroups(groups) {
+  $("groups").replaceChildren(
+    ...groups.map((group) => {
+      const preview = group.last || `${group.members} osób`;
+      const label = `Grupa ${group.name}` + (group.unread ? `, nieprzeczytane: ${group.unread}` : "");
+      return el(
+        "li",
+        { class: "contact" },
+        el(
+          "button",
+          {
+            class: "contact-open",
+            type: "button",
+            "aria-label": `Otwórz rozmowę: ${label}`,
+            onclick: () => invoke("open_chat", { peer: group.id }).catch(showStatus),
+          },
+          el("span", { class: "avatar group-avatar", text: [...group.name][0] || "#" }),
+          el(
+            "span",
+            { class: "contact-text" },
+            el("span", { class: "alias", text: group.name }),
+            el("span", { class: "preview", text: preview }),
+          ),
+          group.unread ? el("span", { class: "badge", text: String(group.unread) }) : el("span"),
+        ),
+      );
+    }),
+  );
+  $("no-groups").hidden = groups.length > 0;
 }
 
 function showStatus(err) {
@@ -111,6 +154,9 @@ $("settings-open").addEventListener("click", () => {
   renderThemes();
   for (const radio of document.querySelectorAll('input[name="mode"]')) {
     radio.checked = radio.value === currentMode();
+  }
+  for (const radio of document.querySelectorAll('input[name="text-size"]')) {
+    radio.checked = radio.value === currentTextSize();
   }
   settingsDialog.showModal();
 });
@@ -205,6 +251,283 @@ $("avatar-remove").addEventListener("click", async () => {
     await invoke("set_avatar");
   } catch (err) {
     setAvatarError(friendly(err));
+  }
+});
+
+for (const radio of document.querySelectorAll('input[name="text-size"]')) {
+  radio.addEventListener("change", () => chooseTextSize(radio.value));
+}
+
+// Preferences in a file of their own
+$("prefs-save").addEventListener("click", async () => {
+  const json = JSON.stringify(
+    { szept: "ustawienia", version: 1, preferences: collectPreferences() },
+    null,
+    2,
+  );
+  try {
+    if (await invoke("save_settings_file", { json })) showStatus("Ustawienia zapisane do pliku.");
+  } catch (err) {
+    showStatus(err);
+  }
+});
+
+$("prefs-load").addEventListener("click", async () => {
+  try {
+    const text = await invoke("load_settings_file");
+    if (text === null) return;
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+    if (data?.szept !== "ustawienia" || typeof data.preferences !== "object") {
+      showStatus("To nie jest plik ustawień Szeptu.");
+      return;
+    }
+    const applied = applyPreferences(data.preferences);
+    refreshPreferenceControls();
+    showStatus(applied ? "Ustawienia wczytane." : "W pliku nie było ustawień, które ta wersja zna.");
+  } catch (err) {
+    showStatus(err);
+  }
+});
+
+// After preferences change from a file or an archive.
+function refreshPreferenceControls() {
+  renderThemes();
+  for (const radio of document.querySelectorAll('input[name="mode"]')) {
+    radio.checked = radio.value === currentMode();
+  }
+  for (const radio of document.querySelectorAll('input[name="text-size"]')) {
+    radio.checked = radio.value === currentTextSize();
+  }
+  $("sounds").checked = soundsOn();
+}
+
+// Your name
+$("name-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await invoke("set_name", { name: $("my-name").value });
+    $("my-name").blur();
+    showStatus("Zapisano imię.");
+  } catch (err) {
+    showStatus(err);
+  }
+});
+
+// Archives
+let archiveMode = "export";
+
+function setArchiveError(text) {
+  $("archive-error").textContent = text;
+  $("archive-error").hidden = !text;
+}
+
+function openArchive(mode) {
+  archiveMode = mode;
+  const exporting = mode === "export";
+  $("archive-form").reset();
+  setArchiveError("");
+  $("archive-progress").hidden = true;
+  $("archive-dialog-title").textContent = exporting ? "Zapisz archiwum" : "Wczytaj archiwum";
+  $("archive-hint").textContent = exporting
+    ? "Archiwum jest szyfrowane tym hasłem (Argon2id, 128 MiB, XChaCha20-Poly1305). Bez hasła nie da się go odczytać, więc go nie zgub. Najlepsze jest długie hasło z kilku słów."
+    : "Kontakty, grupy i rozmowy z archiwum dołączą do tych, które już tu są.";
+  $("archive-repeat-field").hidden = !exporting;
+  $("archive-repeat").required = exporting;
+  $("archive-identity").checked = true;
+  $("archive-identity-warning").hidden = !exporting;
+  $("archive-strength").hidden = true;
+  $("archive-suggest-row").hidden = !exporting;
+  $("archive-suggestion").hidden = true;
+  setPasswordVisible(false);
+  $("archive-identity-label").textContent = exporting
+    ? "Dołącz mój klucz tożsamości (po wczytaniu zostanie ten sam identyfikator, kontakty nic nie muszą robić)"
+    : "Przywróć identyfikator z archiwum (obecny identyfikator zostanie zastąpiony)";
+  $("archive-confirm").textContent = exporting ? "Wybierz plik i zapisz" : "Wybierz plik i wczytaj";
+  $("archive-dialog").showModal();
+}
+
+const STRENGTH_WORDS = ["bardzo słabe", "słabe", "średnie", "dobre", "bardzo dobre"];
+let strengthTimer = 0;
+let lastStrength = null;
+
+$("archive-password").addEventListener("input", () => {
+  if (archiveMode !== "export") return;
+  clearTimeout(strengthTimer);
+  strengthTimer = setTimeout(rateArchivePassword, 150);
+});
+
+async function rateArchivePassword() {
+  const password = $("archive-password").value;
+  if (!password) {
+    $("archive-strength").hidden = true;
+    lastStrength = null;
+    return;
+  }
+  try {
+    lastStrength = await invoke("password_strength", { password });
+  } catch {
+    return;
+  }
+  $("archive-strength").hidden = false;
+  $("archive-meter").value = lastStrength.score;
+  const enough = lastStrength.acceptable ? "" : " – za słabe na archiwum";
+  $("archive-strength-text").textContent = `Hasło: ${STRENGTH_WORDS[lastStrength.score]}${enough}`;
+}
+
+function setPasswordVisible(visible) {
+  for (const id of ["archive-password", "archive-repeat"]) $(id).type = visible ? "text" : "password";
+  $("archive-show").setAttribute("aria-pressed", String(visible));
+  $("archive-show").textContent = visible ? "Ukryj hasło" : "Pokaż hasło";
+}
+
+$("archive-show").addEventListener("click", () =>
+  setPasswordVisible($("archive-show").getAttribute("aria-pressed") !== "true"));
+
+$("archive-suggest").addEventListener("click", async () => {
+  try {
+    const phrase = await invoke("suggest_passphrase");
+    $("archive-password").value = phrase;
+    $("archive-repeat").value = phrase;
+    setPasswordVisible(true);
+    $("archive-suggestion").textContent =
+      "Zapisz to hasło na kartce albo w menedżerze haseł. Bez niego archiwum przepadnie.";
+    $("archive-suggestion").hidden = false;
+    await rateArchivePassword();
+  } catch (err) {
+    setArchiveError(friendly(err));
+  }
+});
+
+$("archive-identity").addEventListener("change", () => {
+  if (archiveMode === "export") $("archive-identity-warning").hidden = !$("archive-identity").checked;
+});
+
+$("archive-export").addEventListener("click", () => openArchive("export"));
+$("archive-import").addEventListener("click", () => openArchive("import"));
+
+$("archive-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const password = $("archive-password").value;
+  const identity = $("archive-identity").checked;
+  setArchiveError("");
+  if ([...password].length < 12) {
+    setArchiveError("Hasło musi mieć co najmniej 12 znaków.");
+    return;
+  }
+  if (archiveMode === "export") {
+    await rateArchivePassword();
+    if (!lastStrength?.acceptable) {
+      setArchiveError("To hasło łatwo odgadnąć. Dodaj kilka słów albo użyj przycisku Wymyśl mocne hasło.");
+      return;
+    }
+  }
+  if (archiveMode === "export" && password !== $("archive-repeat").value) {
+    setArchiveError("Hasła się różnią.");
+    return;
+  }
+  $("archive-confirm").disabled = true;
+  $("archive-progress").hidden = false;
+  $("archive-progress").textContent = archiveMode === "export" ? "Zapisywanie…" : "Wczytywanie…";
+  try {
+    if (archiveMode === "export") {
+      const saved = await invoke("export_archive", {
+        password,
+        includeIdentity: identity,
+        preferences: collectPreferences(),
+      });
+      if (saved) {
+        $("archive-dialog").close();
+        showStatus("Archiwum zapisane.");
+      }
+    } else {
+      const report = await invoke("import_archive_file", { password, restoreIdentity: identity });
+      if (report) {
+        $("archive-dialog").close();
+        const applied = applyPreferences(report.preferences || {});
+        refreshPreferenceControls();
+        const parts = [
+          `rozmowy: ${report.conversations}`,
+          `nowe kontakty: ${report.contacts_added}`,
+          `nowe grupy: ${report.groups_added}`,
+        ];
+        if (report.identity_restored) parts.unshift("przywrócono identyfikator");
+        if (applied) parts.push("przywrócono ustawienia");
+        else if (identity && !report.had_identity) parts.push("archiwum nie zawierało klucza tożsamości");
+        showStatus(`Archiwum wczytane: ${parts.join(", ")}.`);
+      }
+    }
+  } catch (err) {
+    setArchiveError(friendly(err));
+  } finally {
+    $("archive-confirm").disabled = false;
+    $("archive-progress").hidden = true;
+  }
+});
+
+// A contact's new key
+let rekeying = null;
+
+function askKey(alias) {
+  rekeying = alias;
+  $("key-form").reset();
+  $("key-error").hidden = true;
+  $("key-title").textContent = `Nowy klucz: ${alias}`;
+  $("key-dialog").showModal();
+}
+
+$("key-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await invoke("update_contact_key", { alias: rekeying, id: $("key-id").value.trim() });
+    $("key-dialog").close();
+    showStatus(`${rekeying} ma nowy klucz. Rozmowa toczy się dalej.`);
+  } catch (err) {
+    $("key-error").textContent = friendly(err);
+    $("key-error").hidden = false;
+  }
+});
+
+// New group
+$("new-group").addEventListener("click", () => {
+  $("group-form").reset();
+  $("group-error").hidden = true;
+  if (!lastContacts.length) {
+    showStatus("Najpierw dodaj kontakty, z którymi chcesz założyć grupę.");
+    return;
+  }
+  $("group-members").replaceChildren(
+    ...lastContacts.map((contact) =>
+      el(
+        "label",
+        { class: "check" },
+        el("input", { type: "checkbox", value: contact.id }),
+        el("span", { text: contact.alias }),
+      ),
+    ),
+  );
+  $("group-dialog").showModal();
+});
+
+$("group-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const members = [...$("group-members").querySelectorAll("input:checked")].map((input) => input.value);
+  if (!members.length) {
+    $("group-error").textContent = "Zaznacz co najmniej jedną osobę.";
+    $("group-error").hidden = false;
+    return;
+  }
+  try {
+    const group = await invoke("create_group", { name: $("group-name").value.trim(), members });
+    $("group-dialog").close();
+    await invoke("open_chat", { peer: group });
+  } catch (err) {
+    $("group-error").textContent = friendly(err);
+    $("group-error").hidden = false;
   }
 });
 

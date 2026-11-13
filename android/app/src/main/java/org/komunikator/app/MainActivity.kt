@@ -42,6 +42,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -56,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -81,7 +84,9 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -100,6 +105,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 import java.text.DateFormat
 import java.util.Date
 import uniffi.komunikator_ffi.Contact
+import uniffi.komunikator_ffi.Group
 import uniffi.komunikator_ffi.qrCode
 import uniffi.komunikator_ffi.shareLink
 
@@ -135,9 +141,14 @@ class MainActivity : ComponentActivity() {
                     isAppearanceLightNavigationBars = !dark
                 }
             }
-            MaterialTheme(colorScheme = colors) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    Root(model, appearance, dark, onRestart = { SzeptService.start(this) })
+            // The text size chosen in Szept, on top of the phone's own.
+            val density = LocalDensity.current
+            val scaled = Density(density.density, density.fontScale * appearance.textSize.scale)
+            CompositionLocalProvider(LocalDensity provides scaled) {
+                MaterialTheme(colorScheme = colors) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        Root(model, appearance, dark, onRestart = { SzeptService.start(this) })
+                    }
                 }
             }
         }
@@ -171,8 +182,9 @@ class MainActivity : ComponentActivity() {
 private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRestart: () -> Unit) {
     val state by model.state.collectAsState()
     val open = state.contacts.firstOrNull { it.id == state.openId }
+    val openGroup = state.groups.firstOrNull { it.id == state.openId }
 
-    BackHandler(enabled = open != null) { model.open(null) }
+    BackHandler(enabled = open != null || openGroup != null) { model.open(null) }
 
     when {
         state.stopped -> Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
@@ -190,10 +202,24 @@ private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRest
             CircularProgressIndicator()
         }
         open != null -> ChatScreen(
+            key = open.id,
+            title = open.alias,
             contact = open,
+            group = null,
             online = open.id in state.online,
             picture = state.avatars[open.id],
-            messages = state.messages[open.id].orEmpty(),
+            state = state,
+            model = model,
+            onBack = { model.open(null) },
+        )
+        openGroup != null -> ChatScreen(
+            key = openGroup.id,
+            title = openGroup.name,
+            contact = null,
+            group = openGroup,
+            online = openGroup.members.any { it.id in state.online },
+            picture = null,
+            state = state,
             model = model,
             onBack = { model.open(null) },
         )
@@ -217,6 +243,13 @@ private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRest
             text = { Text(friendly(message)) },
         )
     }
+    state.info?.let { message ->
+        AlertDialog(
+            onDismissRequest = model::clearInfo,
+            confirmButton = { TextButton(onClick = model::clearInfo) { Text("OK") } },
+            text = { Text(message) },
+        )
+    }
 }
 
 /** The core reports errors in English: translate the ones people meet. */
@@ -231,8 +264,36 @@ private fun friendly(message: String): String = when {
     "JPEG, PNG, WebP or GIF" in message -> "Wybierz zdjęcie w formacie JPEG, PNG, WebP albo GIF."
     "media file is too large" in message -> "Ten plik jest za duży na wiadomość. Wyślij go spinaczem."
     "cannot be sent as media" in message -> "Tego pliku nie da się wysłać jako GIF."
+    "wrong password, or the archive is damaged" in message -> "Złe hasło albo uszkodzone archiwum."
+    "not a Szept archive" in message -> "To nie jest archiwum Szeptu."
+    "newer Szept" in message -> "To archiwum pochodzi z nowszej wersji Szeptu. Najpierw zaktualizuj aplikację."
+    "password must have at least" in message -> "Hasło musi mieć co najmniej 12 znaków."
+    "too easy to guess" in message -> "To hasło łatwo odgadnąć. Użyj dłuższego, najlepiej z kilku słów."
+    "unreasonable key settings" in message -> "To archiwum ma podejrzane ustawienia szyfrowania i nie zostanie otwarte."
+    "already has this key" in message -> "Ten kontakt ma już ten klucz."
+    "only contacts can be added" in message -> "Do grupy możesz dodać tylko swoje kontakty."
+    "at least one other member" in message -> "Grupa potrzebuje co najmniej jednej osoby poza Tobą."
+    "members" in message && "at most" in message -> "Grupa ma za dużo osób."
+    "the group needs a name" in message -> "Nadaj grupie nazwę."
+    "only the owner" in message -> "Grupę zmienia tylko jej właściciel."
+    "not in this group" in message -> "Nie jesteś już w tej grupie."
+    "name is too long" in message -> "To imię jest za długie."
     "too long" in message -> "Wiadomość jest za długa."
     else -> message
+}
+
+/** The last line of a conversation, short, for the list. */
+private fun previewOf(last: Message): String {
+    val file = last.file
+    val text = when {
+        last.system -> last.body
+        last.sticker != null -> "Naklejka"
+        file == null -> last.body
+        file.media == "voice" -> "🎤 Wiadomość głosowa"
+        file.media == "gif" -> "GIF"
+        else -> "📎 ${file.name}"
+    }
+    return if (last.mine) "Ty: $text" else text
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -249,6 +310,9 @@ private fun ContactsScreen(
 ) {
     var adding by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Contact?>(null) }
+    var rekeying by remember { mutableStateOf<Contact?>(null) }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var newGroup by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -256,6 +320,7 @@ private fun ContactsScreen(
             TopAppBar(
                 title = { Text("Szept") },
                 actions = {
+                    TextButton(onClick = { newGroup = true }) { Text("Nowa grupa") }
                     IconButton(
                         onClick = { settings = true },
                         modifier = Modifier.semantics { contentDescription = "Ustawienia: Twoje zdjęcie i wygląd" },
@@ -280,6 +345,54 @@ private fun ContactsScreen(
                     )
                 }
             }
+            if (state.groups.isNotEmpty()) {
+                item {
+                    Text(
+                        "Grupy",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                }
+            }
+            items(state.groups, key = { it.id }) { group ->
+                val unread = state.unread[group.id] ?: 0
+                val last = state.messages[group.id]?.lastOrNull()
+                ListItem(
+                    modifier = Modifier.clickable { model.open(group.id) },
+                    leadingContent = {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    group.name.take(1).uppercase(),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    },
+                    headlineContent = {
+                        Text(group.name, fontWeight = if (unread > 0) FontWeight.Bold else null)
+                    },
+                    supportingContent = {
+                        Text(last?.let(::previewOf) ?: "${group.members.size} osób", maxLines = 1)
+                    },
+                    trailingContent = { if (unread > 0) Badge { Text("$unread") } },
+                )
+                HorizontalDivider()
+            }
+            if (state.contacts.isNotEmpty()) {
+                item {
+                    Text(
+                        "Kontakty",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                }
+            }
             items(state.contacts, key = { it.id }) { contact ->
                 val online = contact.id in state.online
                 val unread = state.unread[contact.id] ?: 0
@@ -293,16 +406,7 @@ private fun ContactsScreen(
                     supportingContent = {
                         val preview = when {
                             last == null -> if (online) "Połączony" else "Niepołączony"
-                            else -> {
-                                val file = last.file
-                                val text = when {
-                                    file == null -> last.body
-                                    file.media == "voice" -> "🎤 Wiadomość głosowa"
-                                    file.media == "gif" -> "GIF"
-                                    else -> "📎 ${file.name}"
-                                }
-                                if (last.mine) "Ty: $text" else text
-                            }
+                            else -> previewOf(last)
                         }
                         Text(preview, maxLines = 1)
                     },
@@ -311,7 +415,25 @@ private fun ContactsScreen(
                             if (unread > 0) {
                                 Badge { Text("$unread") }
                             }
-                            TextButton(onClick = { removing = contact }) { Text("Usuń") }
+                            Box {
+                                TextButton(onClick = { menuFor = contact.id }) { Text("⋮") }
+                                DropdownMenu(expanded = menuFor == contact.id, onDismissRequest = { menuFor = null }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Nowy klucz kontaktu") },
+                                        onClick = {
+                                            menuFor = null
+                                            rekeying = contact
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Usuń kontakt") },
+                                        onClick = {
+                                            menuFor = null
+                                            removing = contact
+                                        },
+                                    )
+                                }
+                            }
                         }
                     },
                 )
@@ -327,9 +449,46 @@ private fun ContactsScreen(
             appearance = appearance,
             dark = dark,
             myAvatar = state.myAvatar,
+            myName = state.myName,
+            busy = state.busy,
             onPickAvatar = model::setAvatar,
             onRemoveAvatar = model::removeAvatar,
+            onSaveName = model::setName,
+            onExport = { uri, password, identity ->
+                model.exportArchive(uri, password, identity, appearance.toPreferences())
+            },
+            onImport = { uri, password, identity ->
+                model.restoreArchive(uri, password, identity, appearance::apply)
+            },
             onDismiss = { settings = false },
+        )
+    }
+
+    rekeying?.let { contact ->
+        KeyUpdateDialog(
+            contact = contact,
+            parseId = parseId,
+            onDismiss = { rekeying = null },
+            onConfirm = { id ->
+                rekeying = null
+                model.updateContactKey(contact, id)
+            },
+        )
+    }
+
+    if (newGroup) {
+        GroupDialog(
+            title = "Nowa grupa",
+            contacts = state.contacts,
+            initialName = "",
+            others = emptyList(),
+            initialMembers = emptySet(),
+            confirm = "Utwórz",
+            onDismiss = { newGroup = false },
+            onConfirm = { name, members ->
+                newGroup = false
+                model.createGroup(name, members)
+            },
         )
     }
 
@@ -624,20 +783,27 @@ private fun AddContactDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatScreen(
-    contact: Contact,
+    key: String,
+    title: String,
+    contact: Contact?,
+    group: Group?,
     online: Boolean,
     picture: ImageBitmap?,
-    messages: List<Message>,
+    state: UiState,
     model: Messenger,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    var draft by remember(contact.id) { mutableStateOf("") }
-    var editor by remember(contact.id) { mutableStateOf<RichEditText?>(null) }
+    val messages = state.messages[key].orEmpty()
+    val people = peopleOf(state, group, contact?.alias, contact?.id)
+    var draft by remember(key) { mutableStateOf("") }
+    var editor by remember(key) { mutableStateOf<RichEditText?>(null) }
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) model.sendFiles(contact.id, uris)
+        if (uris.isNotEmpty()) model.sendFiles(key, uris)
     }
-    var picking by remember(contact.id) { mutableStateOf(false) }
+    var picking by remember(key) { mutableStateOf(false) }
+    var stickers by remember(key) { mutableStateOf(false) }
+    var groupInfo by remember(key) { mutableStateOf(false) }
     val input = remember { context.getSystemService(InputMethodManager::class.java) }
     val listState = rememberLazyListState()
     val lastMine = messages.indexOfLast { it.mine }
@@ -659,7 +825,7 @@ private fun ChatScreen(
     fun finishRecording(send: Boolean) {
         recording = false
         if (send) {
-            recorder.finish()?.let { (file, length) -> model.sendVoice(contact.id, file, length) }
+            recorder.finish()?.let { (file, length) -> model.sendVoice(key, file, length) }
         } else {
             recorder.cancel()
         }
@@ -679,28 +845,64 @@ private fun ChatScreen(
         }
     }
     // Leaving the conversation drops an unfinished recording.
-    DisposableEffect(contact.id) {
+    DisposableEffect(key) {
         onDispose { recorder.cancel() }
     }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
-    BackHandler(enabled = picking || recording) {
-        if (recording) finishRecording(false) else picking = false
+    BackHandler(enabled = picking || stickers || recording) {
+        when {
+            recording -> finishRecording(false)
+            stickers -> stickers = false
+            else -> picking = false
+        }
+    }
+
+    if (groupInfo && group != null) {
+        GroupInfoDialog(
+            group = group,
+            people = people,
+            online = state.online,
+            contacts = state.contacts,
+            onDismiss = { groupInfo = false },
+            onSave = { name, members ->
+                groupInfo = false
+                model.updateGroup(group.id, name, members)
+            },
+            onLeave = {
+                groupInfo = false
+                model.leaveGroup(group.id)
+            },
+        )
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(contact.alias, online, picture)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = if (group != null) {
+                            Modifier.clickable(onClickLabel = "Członkowie grupy") { groupInfo = true }
+                        } else {
+                            Modifier
+                        },
+                    ) {
+                        Avatar(title, online, picture)
                         Spacer(Modifier.width(12.dp))
                         Column {
-                            Text(contact.alias)
+                            Text(title)
                             Text(
-                                if (online) "Połączony" else "Niepołączony, wiadomości poczekają",
+                                when {
+                                    group != null -> {
+                                        val connected = group.members.count { it.id in state.online }
+                                        "${group.members.size} osób, połączonych: $connected · dotknij"
+                                    }
+                                    online -> "Połączony"
+                                    else -> "Niepołączony, wiadomości poczekają"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -741,6 +943,7 @@ private fun ChatScreen(
                         IconButton(
                             onClick = {
                                 picking = !picking
+                                stickers = false
                                 editor?.let { field ->
                                     if (picking) {
                                         input.hideSoftInputFromWindow(field.windowToken, 0)
@@ -753,6 +956,14 @@ private fun ChatScreen(
                             modifier = Modifier.semantics { contentDescription = "Emoji" },
                         ) { Text("😊", fontSize = 22.sp) }
                         IconButton(
+                            onClick = {
+                                stickers = !stickers
+                                picking = false
+                                editor?.let { input.hideSoftInputFromWindow(it.windowToken, 0) }
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Naklejki" },
+                        ) { FigureView("pierog", 28.dp, animate = false) }
+                        IconButton(
                             onClick = { pickFiles.launch(arrayOf("*/*")) },
                             modifier = Modifier.semantics { contentDescription = "Wyślij pliki" },
                         ) { Text("📎", fontSize = 22.sp) }
@@ -762,7 +973,7 @@ private fun ChatScreen(
                                 // Copied now: the keyboard's permission to read it is short-lived.
                                 val staged = model.stageGif(uri, mime)
                                 if (staged != null) {
-                                    model.sendGif(contact.id, staged)
+                                    model.sendGif(key, staged)
                                 } else {
                                     Toast.makeText(context, "Tego obrazu nie da się wysłać.", Toast.LENGTH_LONG).show()
                                 }
@@ -781,10 +992,16 @@ private fun ChatScreen(
                             ) { MicIcon() }
                         } else {
                             Button(onClick = {
-                                model.send(contact.id, draft.trim())
+                                model.send(key, draft.trim())
                                 editor?.setText("")
                             }) { Text("Wyślij") }
                         }
+                    }
+                }
+                if (stickers && !recording) {
+                    StickerPanel { code ->
+                        stickers = false
+                        model.sendSticker(key, code)
                     }
                 }
                 if (picking && !recording) {
@@ -824,12 +1041,19 @@ private fun ChatScreen(
             }
             items(messages.size, key = { messages[it].id }) { index ->
                 val message = messages[index]
-                Bubble(message, showWord = index == lastMine) {
+                MessageRow(
+                    message = message,
+                    showWord = index == lastMine,
+                    inGroup = group != null,
+                    people = people,
+                    onReact = { reaction -> model.react(key, message.id, reaction) },
+                ) {
                     val file = message.file!!
+                    val from = message.author?.let(people::name) ?: title
                     if (file.media != null) {
-                        MediaContent(file) { model.download(contact.id, message.id) }
+                        MediaContent(file) { model.download(key, message.id) }
                     } else {
-                        FileCard(file, message.mine, contact.alias) { model.download(contact.id, message.id) }
+                        FileCard(file, message.mine, from) { model.download(key, message.id) }
                     }
                 }
             }
@@ -867,41 +1091,6 @@ private fun MicIcon() {
 }
 
 private val timeFormat: DateFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
-
-@Composable
-private fun Bubble(message: Message, showWord: Boolean, fileContent: @Composable () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = if (message.mine) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        Surface(
-            color = if (message.mine) colors.primaryContainer else colors.surfaceContainerHighest,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.widthIn(max = 300.dp),
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (message.file != null) fileContent() else Text(message.body)
-                Row(
-                    modifier = Modifier.align(Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    val label = statusLabel(message.status)
-                    if (message.mine && showWord) {
-                        Text(label, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
-                    }
-                    Text(
-                        timeFormat.format(Date(message.atMs)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.onSurfaceVariant,
-                    )
-                    if (message.mine) StatusMark(message.status, label)
-                }
-            }
-        }
-    }
-}
 
 private fun statusLabel(status: Status) = when (status) {
     Status.QUEUED -> "W kolejce"

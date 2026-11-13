@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{Result, ensure};
+use iroh::EndpointId;
 use serde::{Deserialize, Serialize};
 
 /// Protocol identifier negotiated in the QUIC handshake. Bump the trailing
@@ -34,6 +35,15 @@ pub const MAX_VOICE_MS: u32 = 30 * 60 * 1000;
 /// Upper bound for a profile picture, in bytes. It travels inside one frame.
 pub const MAX_AVATAR_LEN: usize = 48 * 1024;
 
+/// Upper bound for a display name or a group name, in bytes.
+pub const MAX_NAME_LEN: usize = 64;
+
+/// Upper bound for the members of one group, the owner included.
+pub const MAX_GROUP_MEMBERS: usize = 32;
+
+/// Upper bound for the code of a reaction or a sticker, in bytes.
+pub const MAX_CODE_LEN: usize = 32;
+
 /// Random identifier of one message, chosen by the sender.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MessageId([u8; 16]);
@@ -55,6 +65,199 @@ impl std::str::FromStr for MessageId {
             *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)?;
         }
         Ok(Self(bytes))
+    }
+}
+
+/// Random identifier of a group chat, chosen by its owner.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct GroupId([u8; 16]);
+
+impl GroupId {
+    pub fn random() -> Self {
+        Self(rand::random())
+    }
+}
+
+impl fmt::Display for GroupId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+    }
+}
+
+impl fmt::Debug for GroupId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "GroupId({self})")
+    }
+}
+
+impl std::str::FromStr for GroupId {
+    type Err = anyhow::Error;
+
+    /// Parses the 32 hex digits written by [`fmt::Display`].
+    fn from_str(text: &str) -> Result<Self> {
+        ensure!(
+            text.len() == 32 && text.is_ascii(),
+            "a group id has 32 hex digits"
+        );
+        let mut bytes = [0u8; 16];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)?;
+        }
+        Ok(Self(bytes))
+    }
+}
+
+/// One person in a group: their key and the name the owner shows for them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub id: [u8; 32],
+    pub name: String,
+}
+
+impl Member {
+    pub fn endpoint(&self) -> Option<EndpointId> {
+        EndpointId::from_bytes(&self.id).ok()
+    }
+}
+
+/// The state of a group, as its owner last announced it. Only the owner
+/// changes it, and every change raises `version`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupInfo {
+    pub id: GroupId,
+    pub owner: [u8; 32],
+    pub version: u64,
+    pub name: String,
+    /// Everyone in the group, the owner included.
+    pub members: Vec<Member>,
+}
+
+impl GroupInfo {
+    pub fn owner(&self) -> Option<EndpointId> {
+        EndpointId::from_bytes(&self.owner).ok()
+    }
+
+    pub fn has(&self, peer: &EndpointId) -> bool {
+        self.members
+            .iter()
+            .any(|member| member.id == *peer.as_bytes())
+    }
+
+    /// Everyone except `me`.
+    pub fn others(&self, me: &EndpointId) -> Vec<EndpointId> {
+        self.members
+            .iter()
+            .filter(|member| member.id != *me.as_bytes())
+            .filter_map(Member::endpoint)
+            .collect()
+    }
+
+    fn check(&self) -> Result<()> {
+        ensure!(is_name(&self.name), "bad group name");
+        ensure!(
+            !self.members.is_empty() && self.members.len() <= MAX_GROUP_MEMBERS,
+            "bad number of group members"
+        );
+        ensure!(
+            self.members.iter().any(|member| member.id == self.owner),
+            "the owner is not a member"
+        );
+        for (index, member) in self.members.iter().enumerate() {
+            ensure!(member.name.len() <= MAX_NAME_LEN, "member name too long");
+            ensure!(member.endpoint().is_some(), "bad member key");
+            ensure!(
+                !self.members[..index]
+                    .iter()
+                    .any(|other| other.id == member.id),
+                "member listed twice"
+            );
+        }
+        ensure!(self.owner().is_some(), "bad owner key");
+        Ok(())
+    }
+}
+
+/// A non-empty name of at most [`MAX_NAME_LEN`] bytes, without control characters.
+pub fn is_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.len() <= MAX_NAME_LEN && !name.chars().any(char::is_control)
+}
+
+/// A reaction or sticker code: short, lowercase letters, digits and dashes.
+pub fn is_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= MAX_CODE_LEN
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// What a post carries. Posts are the newer kind of message: they can go to
+/// a group, and they can be stickers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Post {
+    Text(String),
+    File {
+        offer: FileOffer,
+        media: Option<Media>,
+    },
+    /// One of the animated stickers every Szept app draws, by its code.
+    Sticker(String),
+}
+
+impl Post {
+    fn check(&self) -> Result<()> {
+        match self {
+            Self::Text(body) => {
+                ensure!(!body.is_empty(), "empty message");
+                ensure!(body.len() <= MAX_TEXT_LEN, "message is too long");
+            }
+            Self::File { offer, media } => {
+                ensure!(crate::files::is_safe_name(&offer.name), "unsafe file name");
+                if let Some(media) = media {
+                    ensure!(offer.size <= MAX_MEDIA_SIZE, "media file is too large");
+                    ensure!(media.accepts(&offer.name), "unexpected media file");
+                }
+            }
+            Self::Sticker(code) => ensure!(is_code(code), "bad sticker code"),
+        }
+        Ok(())
+    }
+}
+
+/// Something sent to a contact that is not a message of its own: it is not
+/// confirmed, and it waits in the queue like a message while they are away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signal {
+    /// A reaction to the message `target`; an empty `reaction` takes it back.
+    React {
+        target: MessageId,
+        group: Option<GroupId>,
+        reaction: String,
+    },
+    /// The current state of a group, from its owner.
+    Group(GroupInfo),
+    /// The sender left the group.
+    Leave(GroupId),
+    /// The sender's display name.
+    Name(String),
+}
+
+impl Signal {
+    pub(crate) fn to_frame(&self) -> Frame {
+        match self {
+            Self::React {
+                target,
+                group,
+                reaction,
+            } => Frame::React {
+                target: *target,
+                group: *group,
+                reaction: reaction.clone(),
+            },
+            Self::Group(info) => Frame::Group { info: info.clone() },
+            Self::Leave(group) => Frame::Leave { group: *group },
+            Self::Name(name) => Frame::Name { name: name.clone() },
+        }
     }
 }
 
@@ -123,6 +326,11 @@ pub enum Content {
     File(FileOffer),
     /// A voice message or a GIF: a file the recipient fetches at once.
     Media(FileOffer, Media),
+    /// A post, for a group or a sticker.
+    Post {
+        group: Option<GroupId>,
+        post: Post,
+    },
 }
 
 /// A message that is ready to be sent.
@@ -172,6 +380,25 @@ impl Outgoing {
         }
     }
 
+    /// Prepares a post: a message for a group, or a sticker. Files in posts
+    /// come from [`crate::Node::share_post`].
+    pub fn post(group: Option<GroupId>, post: Post) -> Result<Self> {
+        ensure!(
+            !matches!(post, Post::File { .. }),
+            "files are offered with Node::share_post"
+        );
+        post.check()?;
+        Ok(Self::post_unchecked(group, post))
+    }
+
+    pub(crate) fn post_unchecked(group: Option<GroupId>, post: Post) -> Self {
+        Self {
+            id: MessageId::random(),
+            sent_at_ms: now_ms(),
+            content: Content::Post { group, post },
+        }
+    }
+
     pub(crate) fn to_frame(&self) -> Frame {
         match &self.content {
             Content::Text(body) => Frame::Text {
@@ -189,6 +416,12 @@ impl Outgoing {
                 sent_at_ms: self.sent_at_ms,
                 offer: offer.clone(),
                 media: *media,
+            },
+            Content::Post { group, post } => Frame::Post {
+                id: self.id,
+                sent_at_ms: self.sent_at_ms,
+                group: *group,
+                post: post.clone(),
             },
         }
     }
@@ -225,6 +458,25 @@ pub(crate) enum Frame {
     /// The sender's profile picture (JPEG, PNG, WebP or GIF), or nothing
     /// when they removed it. Sent on every new connection.
     Avatar { image: Vec<u8> },
+    /// A post: a message for a group, or a sticker. Confirmed with [`Frame::Ack`].
+    Post {
+        id: MessageId,
+        sent_at_ms: u64,
+        group: Option<GroupId>,
+        post: Post,
+    },
+    /// A reaction to a message; empty to take it back.
+    React {
+        target: MessageId,
+        group: Option<GroupId>,
+        reaction: String,
+    },
+    /// The state of a group, from its owner.
+    Group { info: GroupInfo },
+    /// The sender left a group.
+    Leave { group: GroupId },
+    /// The sender's display name.
+    Name { name: String },
 }
 
 /// What the receiver of a file asks for on a fresh bidirectional stream: the
@@ -272,7 +524,13 @@ impl Frame {
                     "not a picture"
                 );
             }
-            Self::Ack { .. } => {}
+            Self::Post { post, .. } => post.check()?,
+            Self::React { reaction, .. } => {
+                ensure!(reaction.is_empty() || is_code(reaction), "bad reaction");
+            }
+            Self::Group { info } => info.check()?,
+            Self::Name { name } => ensure!(is_name(name), "bad name"),
+            Self::Ack { .. } | Self::Leave { .. } => {}
         }
         Ok(frame)
     }
@@ -405,6 +663,59 @@ mod tests {
         let mut huge = b"\xff\xd8\xff".to_vec();
         huge.resize(MAX_AVATAR_LEN + 1, 0);
         assert!(decode(huge).is_err());
+    }
+
+    #[test]
+    fn posts_and_signals_survive_a_round_trip() {
+        let me = iroh::SecretKey::generate().public();
+        let ola = iroh::SecretKey::generate().public();
+        let group = GroupId::random();
+        let info = GroupInfo {
+            id: group,
+            owner: *me.as_bytes(),
+            version: 3,
+            name: "Wycieczka".into(),
+            members: vec![
+                Member {
+                    id: *me.as_bytes(),
+                    name: "Ala".into(),
+                },
+                Member {
+                    id: *ola.as_bytes(),
+                    name: "Ola".into(),
+                },
+            ],
+        };
+        assert_eq!(info.others(&me), vec![ola]);
+        let text = Outgoing::post(Some(group), Post::Text("cześć grupo".into())).unwrap();
+        let sticker = Outgoing::post(None, Post::Sticker("pierog".into())).unwrap();
+        for frame in [
+            text.to_frame(),
+            sticker.to_frame(),
+            Signal::React {
+                target: text.id,
+                group: Some(group),
+                reaction: "ogorek".into(),
+            }
+            .to_frame(),
+            Signal::Group(info.clone()).to_frame(),
+            Signal::Leave(group).to_frame(),
+            Signal::Name("Ala z Mokotowa".into()).to_frame(),
+        ] {
+            assert_eq!(Frame::decode(&frame.encode().unwrap()).unwrap(), frame);
+        }
+        assert_eq!(group.to_string().parse::<GroupId>().unwrap(), group);
+
+        assert!(Outgoing::post(None, Post::Sticker("Zły Kod!".into())).is_err());
+        assert!(Outgoing::post(None, Post::Text(String::new())).is_err());
+        let mut broken = info.clone();
+        broken.members.retain(|member| member.id != info.owner);
+        let frame = Frame::Group { info: broken };
+        assert!(Frame::decode(&postcard::to_stdvec(&frame).unwrap()).is_err());
+        let frame = Frame::Name {
+            name: "x".repeat(MAX_NAME_LEN + 1),
+        };
+        assert!(Frame::decode(&postcard::to_stdvec(&frame).unwrap()).is_err());
     }
 
     #[test]

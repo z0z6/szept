@@ -20,9 +20,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.komunikator_ffi.App
+import uniffi.komunikator_ffi.ArchivedConversation
+import uniffi.komunikator_ffi.ArchivedMessage
+import uniffi.komunikator_ffi.ArchivedReaction
 import uniffi.komunikator_ffi.ChatEvent
 import uniffi.komunikator_ffi.Contact
 import uniffi.komunikator_ffi.EventListener
+import uniffi.komunikator_ffi.Group
 import uniffi.komunikator_ffi.Media
 import uniffi.komunikator_ffi.fileKind
 import uniffi.komunikator_ffi.maxAvatarLen
@@ -54,6 +58,9 @@ enum class Transfer {
     DOWNLOADING,
     SAVED,
     FAILED,
+
+    /** Restored from an archive without its content. */
+    ARCHIVED,
 }
 
 data class FileItem(
@@ -73,7 +80,7 @@ data class FileItem(
     val durationMs: Long = 0,
 )
 
-/** One line of a conversation: text, or a file when [file] is set. */
+/** One line of a conversation: text, a file, a sticker or a note from the app. */
 data class Message(
     val id: String,
     val mine: Boolean,
@@ -81,6 +88,17 @@ data class Message(
     val atMs: Long,
     val status: Status,
     val file: FileItem? = null,
+    /** Who wrote it, in a group. */
+    val author: String? = null,
+    /** The code of an animated sticker. */
+    val sticker: String? = null,
+    /** A note from the app itself, such as a key change. */
+    val system: Boolean = false,
+    /** One reaction per person: identifier → reaction code. */
+    val reactions: Map<String, String> = emptyMap(),
+    /** For our group messages: how many must confirm, and who did. */
+    val recipients: Int = 1,
+    val deliveredBy: Set<String> = emptySet(),
 )
 
 data class UiState(
@@ -102,7 +120,18 @@ data class UiState(
     val avatars: Map<String, ImageBitmap> = emptyMap(),
     /** Our own profile picture. */
     val myAvatar: ImageBitmap? = null,
+    val myName: String = "",
+    /** Display names people chose for themselves, by identifier. */
+    val names: Map<String, String> = emptyMap(),
+    val groups: List<Group> = emptyList(),
+    /** A short report to show once, such as "archive saved". */
+    val info: String? = null,
+    /** An archive is being written or read. */
+    val busy: Boolean = false,
 )
+
+/** Group identifiers have 32 hex digits, people's 64. */
+fun isGroup(key: String): Boolean = key.length == 32
 
 /**
  * Owns the Rust core and turns its events into screen state.
@@ -145,27 +174,40 @@ class Messenger(private val application: Application) : EventListener {
                 if (core != null) return@synchronized
                 outgoingDir.deleteRecursively()
                 try {
-                    val app = App(application.filesDir.absolutePath, false)
-                    app.start(this@Messenger)
-                    core = app
-                    val contacts = app.contacts()
-                    val avatars = contacts.mapNotNull { contact ->
-                        app.avatar(contact.id)?.let(::decodePicture)?.let { contact.id to it }
-                    }.toMap()
-                    _state.update {
-                        it.copy(
-                            ready = true,
-                            stopped = false,
-                            myId = app.myId(),
-                            contacts = contacts,
-                            avatars = avatars,
-                            myAvatar = app.myAvatar()?.let(::decodePicture),
-                        )
-                    }
+                    launchCore()
                 } catch (e: Exception) {
                     fail(e)
                 }
             }
+        }
+    }
+
+    /** Creates and starts the core, and loads what the screens show. */
+    private fun launchCore() {
+        val app = App(application.filesDir.absolutePath, false)
+        app.start(this@Messenger)
+        core = app
+        _state.update { it.copy(ready = true, stopped = false, myId = app.myId()) }
+        reloadPeople(app)
+    }
+
+    /** Contacts, groups, names and pictures, fresh from the core. */
+    private fun reloadPeople(app: App) {
+        val contacts = app.contacts()
+        val groups = app.groups()
+        val everyone = (contacts.map { it.id } + groups.flatMap { group -> group.members.map { it.id } })
+            .toSet() - app.myId()
+        val avatars = everyone.mapNotNull { id -> app.avatar(id)?.let(::decodePicture)?.let { id to it } }.toMap()
+        val names = everyone.mapNotNull { id -> app.displayName(id)?.let { id to it } }.toMap()
+        _state.update {
+            it.copy(
+                contacts = contacts,
+                groups = groups,
+                avatars = avatars,
+                names = names,
+                myName = app.myName(),
+                myAvatar = app.myAvatar()?.let(::decodePicture),
+            )
         }
     }
 
@@ -196,13 +238,24 @@ class Messenger(private val application: Application) : EventListener {
             is ChatEvent.Connected -> _state.update { it.copy(online = it.online + event.peer) }
             is ChatEvent.Disconnected -> _state.update { it.copy(online = it.online - event.peer) }
             is ChatEvent.Message -> receive(
-                event.peer,
-                Message(event.id, false, event.body, event.sentAtMs.toLong(), Status.RECEIVED),
+                event.group ?: event.peer,
+                Message(
+                    event.id, false, event.body, event.sentAtMs.toLong(), Status.RECEIVED,
+                    author = event.group?.let { event.peer },
+                ),
+            )
+            is ChatEvent.Sticker -> receive(
+                event.group ?: event.peer,
+                Message(
+                    event.id, false, "", event.sentAtMs.toLong(), Status.RECEIVED,
+                    author = event.group?.let { event.peer },
+                    sticker = event.code,
+                ),
             )
             is ChatEvent.FileOffered -> {
                 val (media, duration) = describe(event.media)
                 receive(
-                    event.peer,
+                    event.group ?: event.peer,
                     Message(
                         event.id,
                         false,
@@ -219,9 +272,11 @@ class Messenger(private val application: Application) : EventListener {
                             media = media,
                             durationMs = duration,
                         ),
+                        author = event.group?.let { event.peer },
                     ),
                 )
             }
+            is ChatEvent.Reaction -> setReaction(event.group ?: event.peer, event.target, event.peer, event.reaction)
             is ChatEvent.AvatarChanged -> {
                 val picture = core?.avatar(event.peer)?.let(::decodePicture)
                 _state.update {
@@ -234,6 +289,21 @@ class Messenger(private val application: Application) : EventListener {
                     )
                 }
             }
+            is ChatEvent.NameChanged -> {
+                val name = core?.displayName(event.peer) ?: return
+                _state.update { it.copy(names = it.names + (event.peer to name)) }
+            }
+            is ChatEvent.GroupChanged -> core?.let(::reloadPeople)
+            is ChatEvent.GroupClosed -> {
+                val text = if (event.reason == "removed") {
+                    "Właściciel usunął Cię z tej grupy."
+                } else {
+                    "Właściciel zamknął tę grupę."
+                }
+                note(event.group, text)
+                core?.let(::reloadPeople)
+                _state.update { if (it.openId == event.group) it.copy(openId = null) else it }
+            }
             is ChatEvent.FileProgress -> updateFile(event.peer, event.id) {
                 it.copy(transfer = Transfer.DOWNLOADING, done = event.done.toLong())
             }
@@ -243,9 +313,16 @@ class Messenger(private val application: Application) : EventListener {
             is ChatEvent.FileFailed -> updateFile(event.peer, event.id) {
                 it.copy(transfer = Transfer.FAILED, reason = event.reason)
             }
-            is ChatEvent.Sent -> synchronized(sendLock) { setStatus(event.peer, event.id, Status.SENT) }
+            is ChatEvent.Sent -> synchronized(sendLock) {
+                setStatus(event.group ?: event.peer, event.id, Status.SENT)
+            }
             is ChatEvent.Delivered -> synchronized(sendLock) {
-                setStatus(event.peer, event.id, Status.DELIVERED)
+                val group = event.group
+                if (group == null) {
+                    setStatus(event.peer, event.id, Status.DELIVERED)
+                } else {
+                    deliveredBy(group, event.id, event.peer)
+                }
             }
         }
     }
@@ -285,9 +362,179 @@ class Messenger(private val application: Application) : EventListener {
     fun send(peer: String, body: String) = withCore { app ->
         synchronized(sendLock) {
             val id = app.send(peer, body)
-            append(peer, Message(id, true, body, System.currentTimeMillis(), Status.QUEUED))
+            append(
+                peer,
+                Message(id, true, body, System.currentTimeMillis(), Status.QUEUED, recipients = recipients(peer)),
+            )
         }
     }
+
+    /** Sends an animated sticker to a contact or a group. */
+    fun sendSticker(peer: String, code: String) = withCore { app ->
+        synchronized(sendLock) {
+            val id = app.sendSticker(peer, code)
+            append(
+                peer,
+                Message(
+                    id, true, "", System.currentTimeMillis(), Status.QUEUED,
+                    sticker = code, recipients = recipients(peer),
+                ),
+            )
+        }
+    }
+
+    /** Reacts to a message, or takes our reaction back with an empty `reaction`. */
+    fun react(peer: String, target: String, reaction: String) = withCore { app ->
+        app.react(peer, target, reaction)
+        setReaction(peer, target, app.myId(), reaction)
+    }
+
+    fun setName(name: String) = withCore { app ->
+        app.setName(name)
+        _state.update { it.copy(myName = app.myName(), info = "Zapisano imię.") }
+    }
+
+    fun createGroup(name: String, members: List<String>) = withCore { app ->
+        val group = app.createGroup(name, members)
+        reloadPeople(app)
+        open(group.id)
+    }
+
+    fun updateGroup(group: String, name: String, members: List<String>) = withCore { app ->
+        app.updateGroup(group, name, members)
+        reloadPeople(app)
+    }
+
+    /** Leaves a group; for its owner this closes it for everyone. */
+    fun leaveGroup(group: String) = withCore { app ->
+        app.leaveGroup(group)
+        notifier.cancel(group)
+        _state.update {
+            it.copy(
+                messages = it.messages - group,
+                unread = it.unread - group,
+                openId = if (it.openId == group) null else it.openId,
+            )
+        }
+        reloadPeople(app)
+    }
+
+    /**
+     * Gives a contact the identifier they got after reinstalling Szept. The
+     * old conversation ends with a note and the new one carries on below it.
+     */
+    fun updateContactKey(contact: Contact, newId: String) = withCore { app ->
+        val old = app.updateContactKey(contact.alias, newId)
+        val new = app.contacts().first { it.alias == contact.alias }.id
+        val note = noteMessage("🔑 Kontakt ma nowy klucz. Wcześniejsza rozmowa zakończyła się tutaj, nowa toczy się poniżej.")
+        _state.update {
+            val moved = it.messages[old].orEmpty() + note + it.messages[new].orEmpty()
+            it.copy(
+                messages = it.messages - old + (new to moved),
+                unread = it.unread - old,
+                online = it.online - old,
+                openId = if (it.openId == old) new else it.openId,
+                info = "${contact.alias} ma nowy klucz.",
+            )
+        }
+        notifier.cancel(old)
+        reloadPeople(app)
+    }
+
+    /**
+     * Writes an encrypted archive of everything into `target`, a file the
+     * person picked. The core writes a private copy first.
+     */
+    fun exportArchive(
+        target: Uri,
+        password: String,
+        includeIdentity: Boolean,
+        preferences: Map<String, String>,
+    ) = withCore { app ->
+        _state.update { it.copy(busy = true) }
+        val temp = File(application.cacheDir, "archiwum-${System.nanoTime()}.szept")
+        try {
+            val me = app.myId()
+            val conversations = _state.value.messages.map { (key, messages) ->
+                ArchivedConversation(key, messages.map { archived(it, me) })
+            }
+            app.exportArchive(temp.absolutePath, password, includeIdentity, conversations, preferences)
+            val output = application.contentResolver.openOutputStream(target, "wt")
+                ?: error("Nie można zapisać pliku.")
+            output.use { sink -> temp.inputStream().use { it.copyTo(sink) } }
+            _state.update { it.copy(info = "Archiwum zapisane.") }
+        } finally {
+            temp.delete()
+            _state.update { it.copy(busy = false) }
+        }
+    }
+
+    /**
+     * Reads an archive the person picked. Contacts, groups and conversations
+     * join what is here; with `restoreIdentity` the identifier from the
+     * archive replaces the current one. The core restarts for that.
+     */
+    fun restoreArchive(
+        source: Uri,
+        password: String,
+        restoreIdentity: Boolean,
+        applyPreferences: (Map<String, String>) -> Int,
+    ) {
+        scope.launch {
+            _state.update { it.copy(busy = true) }
+            val temp = File(application.cacheDir, "archiwum-${System.nanoTime()}.szept")
+            try {
+                val input = application.contentResolver.openInputStream(source)
+                    ?: error("Nie można otworzyć pliku.")
+                input.use { from -> temp.outputStream().use { from.copyTo(it) } }
+                synchronized(lifecycle) {
+                    core?.let { app ->
+                        core = null
+                        app.stop()
+                        app.destroy()
+                    }
+                    _state.update { it.copy(online = emptySet()) }
+                    val result = try {
+                        uniffi.komunikator_ffi.importArchive(
+                            application.filesDir.absolutePath, temp.absolutePath, password, restoreIdentity,
+                        )
+                    } finally {
+                        // Back online whatever happened, with the identity now on disk.
+                        launchCore()
+                    }
+                    val prefsApplied = applyPreferences(result.preferences)
+                    val me = _state.value.myId
+                    val incoming = result.conversations.associate { conversation ->
+                        conversation.key to conversation.messages.map { restored(it, me) }
+                    }
+                    _state.update { state ->
+                        val merged = state.messages.toMutableMap()
+                        for ((key, messages) in incoming) {
+                            val known = merged[key].orEmpty()
+                            val fresh = messages.filter { message -> known.none { it.id == message.id } }
+                            merged[key] = (known + fresh).sortedBy { it.atMs }
+                        }
+                        val parts = buildList {
+                            if (result.identityRestored) add("przywrócono identyfikator")
+                            add("rozmowy: ${result.conversations.size}")
+                            add("nowe kontakty: ${result.contactsAdded}")
+                            add("nowe grupy: ${result.groupsAdded}")
+                            if (prefsApplied > 0) add("przywrócono ustawienia")
+                            if (restoreIdentity && !result.hadIdentity) add("archiwum nie miało klucza tożsamości")
+                        }
+                        state.copy(messages = merged, info = "Archiwum wczytane: ${parts.joinToString(", ")}.")
+                    }
+                }
+            } catch (e: Exception) {
+                fail(e)
+            } finally {
+                temp.delete()
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    fun clearInfo() = _state.update { it.copy(info = null) }
 
     /**
      * Offers files picked by the person. Android hands out content links,
@@ -306,6 +553,7 @@ class Messenger(private val application: Application) : EventListener {
             val input = resolver.openInputStream(uri) ?: error("Nie można otworzyć pliku $name")
             input.use { source -> copy.outputStream().use { source.copyTo(it) } }
             val sent = app.sendFile(peer, copy.absolutePath)
+            val count = recipients(peer)
             synchronized(sendLock) {
                 append(
                     peer,
@@ -324,6 +572,7 @@ class Messenger(private val application: Application) : EventListener {
                             done = sent.size.toLong(),
                             path = copy.absolutePath,
                         ),
+                        recipients = count,
                     ),
                 )
                 early.remove(sent.id)?.let { setStatus(peer, sent.id, it) }
@@ -410,6 +659,7 @@ class Messenger(private val application: Application) : EventListener {
                         media = kind,
                         durationMs = duration,
                     ),
+                    recipients = recipients(peer),
                 ),
             )
             early.remove(sent.id)?.let { setStatus(peer, sent.id, it) }
@@ -502,13 +752,126 @@ class Messenger(private val application: Application) : EventListener {
         null -> null to 0L
     }
 
+    /**
+     * Updates a file wherever its message is: file events name the sender,
+     * and a group's file sits in the group's conversation.
+     */
     private fun updateFile(peer: String, id: String, change: (FileItem) -> FileItem) = _state.update { state ->
-        val conversation = state.messages[peer] ?: return@update state
-        val updated = conversation.map { message ->
+        val key = if (state.messages[peer]?.any { it.id == id } == true) {
+            peer
+        } else {
+            state.messages.entries.firstOrNull { (_, list) -> list.any { it.id == id } }?.key
+                ?: return@update state
+        }
+        val updated = state.messages.getValue(key).map { message ->
             val file = message.file
             if (message.id == id && file != null) message.copy(file = change(file)) else message
         }
-        state.copy(messages = state.messages + (peer to updated))
+        state.copy(messages = state.messages + (key to updated))
+    }
+
+    /** How many people must confirm a message to `peer`, a contact or a group. */
+    private fun recipients(peer: String): Int =
+        _state.value.groups.firstOrNull { it.id == peer }?.let { (it.members.size - 1).coerceAtLeast(1) } ?: 1
+
+    private fun setReaction(key: String, target: String, who: String, reaction: String) = _state.update { state ->
+        val conversation = state.messages[key] ?: return@update state
+        val updated = conversation.map { message ->
+            if (message.id != target) {
+                message
+            } else if (reaction.isEmpty()) {
+                message.copy(reactions = message.reactions - who)
+            } else {
+                message.copy(reactions = message.reactions + (who to reaction))
+            }
+        }
+        state.copy(messages = state.messages + (key to updated))
+    }
+
+    private fun deliveredBy(group: String, id: String, who: String) = _state.update { state ->
+        val conversation = state.messages[group] ?: return@update state
+        val updated = conversation.map { message ->
+            if (message.id != id) return@map message
+            val by = message.deliveredBy + who
+            message.copy(
+                deliveredBy = by,
+                status = if (by.size >= message.recipients) Status.DELIVERED else message.status,
+            )
+        }
+        state.copy(messages = state.messages + (group to updated))
+    }
+
+    private var notes = 0L
+
+    private fun noteMessage(text: String) = Message(
+        "system-${System.currentTimeMillis()}-${notes++}", false, text, System.currentTimeMillis(),
+        Status.RECEIVED, system = true,
+    )
+
+    private fun note(key: String, text: String) = append(key, noteMessage(text))
+
+    private fun archived(message: Message, me: String): ArchivedMessage {
+        val file = message.file
+        return ArchivedMessage(
+            id = message.id,
+            author = if (message.mine) "" else message.author.orEmpty(),
+            atMs = message.atMs.toULong(),
+            kind = when {
+                message.system -> "system"
+                message.sticker != null -> "sticker"
+                file != null -> "file"
+                else -> "text"
+            },
+            body = message.sticker ?: message.body,
+            fileName = file?.name,
+            fileSize = (file?.size ?: 0L).toULong(),
+            fileHash = file?.hash,
+            media = when (file?.media) {
+                "voice" -> Media.Voice((file?.durationMs ?: 0L).toUInt())
+                "gif" -> Media.Gif
+                else -> null
+            },
+            filePath = file?.path,
+            status = message.status.name.lowercase(),
+            reactions = message.reactions.map { (who, reaction) ->
+                ArchivedReaction(if (who == me) "" else who, reaction)
+            },
+        )
+    }
+
+    private fun restored(message: ArchivedMessage, me: String): Message {
+        val mine = message.author.isEmpty() && message.kind != "system"
+        val file = message.fileName?.let { name ->
+            val (media, duration) = describe(message.media)
+            val path = message.filePath?.takeIf { File(it).exists() }
+            FileItem(
+                name = name,
+                size = message.fileSize.toLong(),
+                hash = message.fileHash.orEmpty(),
+                kind = fileKind(name),
+                transfer = if (path != null) Transfer.SAVED else Transfer.ARCHIVED,
+                done = if (path != null) message.fileSize.toLong() else 0,
+                path = path,
+                media = media,
+                durationMs = duration,
+            )
+        }
+        return Message(
+            id = message.id,
+            mine = mine,
+            body = if (message.kind == "sticker") "" else message.body,
+            atMs = message.atMs.toLong(),
+            status = when (message.status) {
+                "queued", "sent" -> Status.SENT
+                "delivered" -> Status.DELIVERED
+                else -> Status.RECEIVED
+            },
+            file = file,
+            author = message.author.takeIf { !mine && it.isNotEmpty() },
+            sticker = message.body.takeIf { message.kind == "sticker" },
+            system = message.kind == "system",
+            reactions = message.reactions.associate { (if (it.who.isEmpty()) me else it.who) to it.reaction },
+        )
     }
 
     private fun receive(peer: String, message: Message) {
@@ -527,8 +890,11 @@ class Messenger(private val application: Application) : EventListener {
             }
         }
         if (fresh && !seen) {
-            val alias = _state.value.contacts.firstOrNull { it.id == peer }?.alias ?: "kontakt"
-            notifier.show(peer, alias, _state.value.unread[peer] ?: 1)
+            val state = _state.value
+            val title = state.groups.firstOrNull { it.id == peer }?.name?.let { "grupa $it" }
+                ?: state.contacts.firstOrNull { it.id == peer }?.alias
+                ?: "kontakt"
+            notifier.show(peer, title, state.unread[peer] ?: 1)
         }
     }
 

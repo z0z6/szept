@@ -180,6 +180,7 @@ private fun describe(file: FileItem): String = when (file.transfer) {
     Transfer.DOWNLOADING -> "${formatSize(file.done)} z ${formatSize(file.size)}"
     Transfer.SAVED -> "${formatSize(file.size)}, zapisany"
     Transfer.SHARED -> "${formatSize(file.size)}, udostępniony z tego telefonu"
+    Transfer.ARCHIVED -> "${formatSize(file.size)}, z archiwum, bez zawartości"
     else -> formatSize(file.size)
 }
 

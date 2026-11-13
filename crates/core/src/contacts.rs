@@ -60,6 +60,23 @@ impl Contacts {
         Ok(removed)
     }
 
+    /// Gives the contact `alias` a new key, after that person reinstalled the
+    /// app and got a new identity. Returns the old key.
+    pub fn replace_id(&mut self, alias: &str, id: EndpointId) -> Result<EndpointId> {
+        let Some(old) = self.by_alias.get(alias).copied() else {
+            bail!("unknown contact `{alias}`");
+        };
+        if old == id {
+            bail!("this contact already has this key");
+        }
+        if let Some(existing) = self.alias_of(&id) {
+            bail!("this key is already saved as `{existing}`");
+        }
+        self.by_alias.insert(alias.to_owned(), id);
+        self.save()?;
+        Ok(old)
+    }
+
     /// Looks up the key saved under `alias`.
     pub fn get(&self, alias: &str) -> Option<EndpointId> {
         self.by_alias.get(alias).copied()
@@ -121,6 +138,11 @@ mod tests {
         let mut book = Contacts::load(&path).unwrap();
         assert_eq!(book.get("ala"), Some(ala));
         assert_eq!(book.alias_of(&ala), Some("ala"));
+        let new_key = SecretKey::generate().public();
+        assert_eq!(book.replace_id("ala", new_key).unwrap(), ala);
+        assert!(book.replace_id("ala", new_key).is_err());
+        assert!(book.replace_id("nikt", ala).is_err());
+        assert_eq!(Contacts::load(&path).unwrap().get("ala"), Some(new_key));
         assert!(book.remove("ala").unwrap());
         assert!(!book.remove("ala").unwrap());
         fs::remove_dir_all(dir).unwrap();

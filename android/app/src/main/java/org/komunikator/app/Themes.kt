@@ -80,11 +80,19 @@ val THEMES = listOf(
     ),
 )
 
-/** Light, dark, or whatever the phone uses. */
-enum class Mode(val label: String) {
-    SYSTEM("Jak w systemie"),
-    LIGHT("Jasny"),
-    DARK("Ciemny"),
+/** Light, dark, or whatever the phone uses. `key` is shared with the desktop app. */
+enum class Mode(val label: String, val key: String) {
+    SYSTEM("Jak w systemie", "system"),
+    LIGHT("Jasny", "light"),
+    DARK("Ciemny", "dark"),
+}
+
+/** Text size on top of the phone's own setting. `key` is shared with the desktop app. */
+enum class TextSize(val label: String, val key: String, val scale: Float) {
+    SMALL("Mały", "small", 0.9f),
+    NORMAL("Zwykły", "normal", 1f),
+    LARGE("Duży", "large", 1.125f),
+    XLARGE("Bardzo duży", "xlarge", 1.25f),
 }
 
 /** Builds the Material colours of a theme. Status colours are the same in every theme. */
@@ -146,6 +154,41 @@ class Appearance(context: Context) {
     )
         private set
 
+    var textSize: TextSize by mutableStateOf(
+        TextSize.entries.firstOrNull { it.name == prefs.getString(KEY_SIZE, null) } ?: TextSize.NORMAL,
+    )
+        private set
+
+    fun choose(size: TextSize) {
+        this.textSize = size
+        prefs.edit().putString(KEY_SIZE, size.name).apply()
+    }
+
+    /** The preferences as archives and settings files carry them, the same on every platform. */
+    fun toPreferences(): Map<String, String> = mapOf(
+        "theme" to theme.id,
+        "mode" to mode.key,
+        "text_size" to textSize.key,
+    )
+
+    /** Applies preferences from an archive or a settings file. Returns how many were known. */
+    fun apply(preferences: Map<String, String>): Int {
+        var applied = 0
+        THEMES.firstOrNull { it.id == preferences["theme"] }?.let {
+            choose(it)
+            applied++
+        }
+        Mode.entries.firstOrNull { it.key == preferences["mode"] }?.let {
+            choose(it)
+            applied++
+        }
+        TextSize.entries.firstOrNull { it.key == preferences["text_size"] }?.let {
+            choose(it)
+            applied++
+        }
+        return applied
+    }
+
     fun choose(theme: Theme) {
         this.theme = theme
         prefs.edit().putString(KEY_THEME, theme.id).apply()
@@ -165,5 +208,6 @@ class Appearance(context: Context) {
     private companion object {
         const val KEY_THEME = "theme"
         const val KEY_MODE = "mode"
+        const val KEY_SIZE = "text_size"
     }
 }

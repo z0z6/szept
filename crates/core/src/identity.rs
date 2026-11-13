@@ -71,6 +71,39 @@ impl Identity {
     pub(crate) fn secret_key(&self) -> SecretKey {
         self.secret.clone()
     }
+
+    /// The raw secret key, for an encrypted archive. Never store it in clear.
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
+    }
+
+    /// Replaces the identity at `path` with the secret key from an archive.
+    /// The identity that was there is gone for good.
+    pub fn restore(path: &Path, secret: [u8; 32]) -> Result<Self> {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)
+                .with_context(|| format!("cannot create directory {}", dir.display()))?;
+        }
+        let tmp = path.with_extension("key.tmp");
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&tmp)
+            .with_context(|| format!("cannot write identity file {}", tmp.display()))?;
+        file.write_all(&secret)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)
+            .with_context(|| format!("cannot write identity file {}", path.display()))?;
+        Ok(Self {
+            secret: SecretKey::from_bytes(&secret),
+        })
+    }
 }
 
 /// The conventional location of the identity file inside a data directory.

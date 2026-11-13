@@ -41,6 +41,18 @@
       </p>
     </section>
 
+    <section aria-labelledby="groups-title">
+      <div class="contacts-head">
+        <h2 id="groups-title">Grupy</h2>
+        <button class="button" id="new-group" type="button">Nowa grupa</button>
+      </div>
+      <ul class="contact-list" id="groups"></ul>
+      <p class="empty" id="no-groups" hidden>
+        Grupa łączy kilka Twoich kontaktów w jednej rozmowie. Wiadomości idą prosto
+        od autora do każdego członka, bez serwera.
+      </p>
+    </section>
+
     <footer class="footer">
       <label class="switch"><input type="checkbox" id="sounds"> Dźwięki</label>
       <span id="status" role="status"></span>
@@ -101,6 +113,16 @@
       <p class="error" id="avatar-error" role="alert" hidden></p>
     </section>
 
+    <section aria-labelledby="name-title">
+      <h3 id="name-title">Twoje imię</h3>
+      <form class="inline-form" id="name-form">
+        <input id="my-name" maxlength="64" autocomplete="off" aria-labelledby="name-title"
+          placeholder="Na przykład Ala z Mokotowa">
+        <button class="button" type="submit">Zapisz</button>
+      </form>
+      <p class="hint">Widzą je kontakty i członkowie Twoich grup, którzy nie mają Cię w kontaktach.</p>
+    </section>
+
     <section aria-labelledby="theme-title">
       <h3 id="theme-title">Motyw</h3>
       <div class="themes" id="themes" role="radiogroup" aria-labelledby="theme-title"></div>
@@ -115,9 +137,118 @@
       </div>
     </section>
 
+    <section aria-labelledby="size-title">
+      <h3 id="size-title">Rozmiar tekstu</h3>
+      <div class="modes" role="radiogroup" aria-labelledby="size-title">
+        <label><input type="radio" name="text-size" value="small"> Mały</label>
+        <label><input type="radio" name="text-size" value="normal"> Zwykły</label>
+        <label><input type="radio" name="text-size" value="large"> Duży</label>
+        <label><input type="radio" name="text-size" value="xlarge"> Bardzo duży</label>
+      </div>
+    </section>
+
+    <section aria-labelledby="prefs-title">
+      <h3 id="prefs-title">Twoje ustawienia</h3>
+      <p class="hint">
+        Wygląd i preferencje zapisują się same na tym komputerze. Możesz je też zapisać
+        do pliku i wczytać po reinstalacji albo na innym urządzeniu, także na telefonie.
+        Archiwum zawiera je automatycznie.
+      </p>
+      <div class="actions">
+        <button class="button" id="prefs-save" type="button">Zapisz ustawienia do pliku…</button>
+        <button class="button" id="prefs-load" type="button">Wczytaj ustawienia z pliku…</button>
+      </div>
+    </section>
+
+    <section aria-labelledby="archive-title">
+      <h3 id="archive-title">Archiwum</h3>
+      <p class="hint">
+        Zapisz rozmowy, kontakty i grupy w zaszyfrowanym pliku, żeby wczytać je po
+        aktualizacji, ponownej instalacji albo na nowym komputerze.
+      </p>
+      <div class="actions">
+        <button class="button" id="archive-export" type="button">Zapisz archiwum…</button>
+        <button class="button" id="archive-import" type="button">Wczytaj archiwum…</button>
+      </div>
+    </section>
+
     <div class="dialog-actions">
       <button class="button primary" type="button" data-close>Gotowe</button>
     </div>
+  </dialog>
+
+  <dialog id="archive-dialog" aria-labelledby="archive-dialog-title">
+    <form id="archive-form" method="dialog">
+      <h2 id="archive-dialog-title"></h2>
+      <p class="hint" id="archive-hint"></p>
+      <label class="field">Hasło archiwum
+        <input id="archive-password" type="password" minlength="12" autocomplete="new-password" required>
+      </label>
+      <div class="strength" id="archive-strength" hidden>
+        <meter id="archive-meter" min="0" max="4" low="2" high="3" optimum="4" value="0"></meter>
+        <span id="archive-strength-text" aria-live="polite"></span>
+      </div>
+      <div class="passphrase" id="archive-suggest-row">
+        <button class="button" id="archive-suggest" type="button">Wymyśl mocne hasło</button>
+        <button class="button" id="archive-show" type="button" aria-pressed="false">Pokaż hasło</button>
+      </div>
+      <p class="hint" id="archive-suggestion" hidden></p>
+      <label class="field" id="archive-repeat-field">Powtórz hasło
+        <input id="archive-repeat" type="password" autocomplete="new-password">
+      </label>
+      <label class="check"><input type="checkbox" id="archive-identity" checked>
+        <span id="archive-identity-label"></span></label>
+      <p class="warning" id="archive-identity-warning" hidden>
+        Z kluczem tożsamości ktoś, kto zdobędzie plik i hasło, może podszywać się pod Ciebie.
+        Trzymaj archiwum w bezpiecznym miejscu, a hasło osobno.
+      </p>
+      <p class="error" id="archive-error" role="alert" hidden></p>
+      <p class="hint" id="archive-progress" role="status" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" id="archive-confirm" type="submit"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="key-dialog" aria-labelledby="key-title">
+    <form id="key-form" method="dialog">
+      <h2 id="key-title"></h2>
+      <p class="hint">
+        Użyj tego, gdy ta osoba zainstalowała Szept od nowa i ma nowy identyfikator.
+        Stara rozmowa zostanie zakończona, a nowa będzie toczyć się pod nią.
+      </p>
+      <p class="warning">
+        Sprawdź nowy identyfikator osobiście albo przez inny kanał. Ktoś obcy też może
+        podesłać swój, podszywając się pod Twój kontakt.
+      </p>
+      <label class="field">Nowy identyfikator
+        <textarea id="key-id" rows="3" spellcheck="false" autocomplete="off" required></textarea>
+      </label>
+      <p class="error" id="key-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" type="submit">Zaktualizuj klucz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="group-dialog" aria-labelledby="group-dialog-title">
+    <form id="group-form" method="dialog">
+      <h2 id="group-dialog-title">Nowa grupa</h2>
+      <label class="field">Nazwa grupy
+        <input id="group-name" maxlength="64" autocomplete="off" required>
+      </label>
+      <fieldset class="members">
+        <legend>Członkowie</legend>
+        <div id="group-members"></div>
+      </fieldset>
+      <p class="error" id="group-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" type="submit">Utwórz grupę</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="remove-dialog" aria-labelledby="remove-title">

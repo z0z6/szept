@@ -21,6 +21,15 @@ cli = ["uniffi/cli"]
 
 [dependencies]
 anyhow.workspace = true
+# Encrypted archives: a key from the password (Argon2id), then XChaCha20-Poly1305.
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+# Wipes keys and opened archives from memory.
+zeroize = "1"
+postcard.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 komunikator-core = { path = "../core" }
 qrcode = { version = "0.14", default-features = false }
 thiserror = "2"
@@ -28,7 +37,6 @@ tokio.workspace = true
 uniffi = "0.32"
 
 [dev-dependencies]
-rand.workspace = true
 
 # The generated FFI glue needs `unsafe`, so this crate cannot inherit the
 # workspace-wide ban. Hand-written code here stays free of it.

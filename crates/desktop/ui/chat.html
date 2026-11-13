@@ -11,11 +11,12 @@
   <div class="chat">
     <header class="chat-head">
       <span class="avatar" id="avatar" aria-hidden="true"></span>
-      <div>
+      <div class="chat-title">
         <h1 id="alias"></h1>
         <p id="presence" role="status"></p>
         <p class="problem" id="problem" role="alert" hidden></p>
       </div>
+      <button class="button" id="members-open" type="button" hidden>Członkowie</button>
     </header>
 
     <section class="messages" id="messages" aria-label="Wiadomości" aria-live="polite"></section>
@@ -26,6 +27,10 @@
         <div class="emoji-grid" id="emoji-grid" role="tabpanel"></div>
         <p class="emoji-hint" id="emoji-hint" hidden></p>
       </div>
+      <div class="sticker-panel" id="sticker-panel" hidden>
+        <p class="sticker-title">Szeptusie: wyślij naklejkę</p>
+        <div class="sticker-grid" id="sticker-grid"></div>
+      </div>
       <div class="recorder" id="recorder" hidden>
         <span class="rec-dot" aria-hidden="true"></span>
         <span class="rec-time" id="rec-time" role="timer" aria-live="off">0:00</span>
@@ -35,6 +40,8 @@
       </div>
       <button class="icon-button emoji-toggle" id="emoji-toggle" type="button"
         aria-label="Emoji" aria-expanded="false" aria-controls="emoji-panel">😊</button>
+      <button class="icon-button sticker-toggle" id="sticker-toggle" type="button" title="Naklejki"
+        aria-label="Naklejki" aria-expanded="false" aria-controls="sticker-panel"></button>
       <button class="icon-button" id="attach" type="button" title="Wyślij pliki (albo przeciągnij je na okno)"
         aria-label="Wyślij pliki">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M16.5 6.5 8.6 14.4a2 2 0 0 0 2.8 2.8l7.4-7.4a4 4 0 0 0-5.7-5.7l-7.6 7.6a6 6 0 0 0 8.5 8.5l6.3-6.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -49,8 +56,30 @@
     </form>
   </div>
 
+  <dialog id="members-dialog" aria-labelledby="members-title">
+    <form id="members-form" method="dialog">
+      <h2 id="members-title">Grupa</h2>
+      <label class="field" id="group-name-field">Nazwa grupy
+        <input id="group-name" maxlength="64" autocomplete="off" required>
+      </label>
+      <fieldset class="members">
+        <legend>Członkowie</legend>
+        <div id="member-list"></div>
+      </fieldset>
+      <p class="hint" id="members-hint"></p>
+      <p class="error" id="members-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button danger" id="leave-group" type="button"></button>
+        <button class="button" type="button" data-close>Zamknij</button>
+        <button class="button primary" id="members-save" type="submit">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="common.js"></script>
   <script src="emoji.js"></script>
+  <script src="figures-data.js"></script>
+  <script src="figures.js"></script>
   <script src="chat.js"></script>
 </body>
 </html>
