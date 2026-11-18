@@ -16,7 +16,7 @@ tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 # Profile pictures reach the windows as data: URLs.
-base64 = "0.22"
+base64 = "0.23"
 komunikator-ffi = { path = "../ffi" }
 serde = { workspace = true }
 tauri = { version = "2.12", features = ["protocol-asset"] }
