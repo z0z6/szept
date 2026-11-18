@@ -22,7 +22,7 @@ cli = ["uniffi/cli"]
 [dependencies]
 anyhow.workspace = true
 # Encrypted archives: a key from the password (Argon2id), then XChaCha20-Poly1305.
-argon2 = "0.5"
+argon2 = "0.6"
 chacha20poly1305 = "0.10"
 # Wipes keys and opened archives from memory.
 zeroize = "1"
