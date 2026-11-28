@@ -608,7 +608,7 @@ fun ArchiveDialog(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    ButtonRow(modifier = Modifier.padding(top = 4.dp)) {
                         TextButton(onClick = {
                             val phrase = suggestPassphrase()
                             password = phrase

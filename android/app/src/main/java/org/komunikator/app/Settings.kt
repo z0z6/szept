@@ -146,7 +146,7 @@ fun SettingsDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ButtonRow {
                             OutlinedButton(onClick = {
                                 pick.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -165,7 +165,7 @@ fun SettingsDialog(
                         value = name,
                         onValueChange = { name = it.take(64) },
                         singleLine = true,
-                        placeholder = { Text(t("Na przykład Ala z Mokotowa")) },
+                        placeholder = { Text(t("np. Ala z Mokotowa")) },
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = { onSaveName(name) }, enabled = name.trim() != myName) { Text(t("Zapisz")) }
@@ -175,8 +175,6 @@ fun SettingsDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-
-                LanguageChoice(appearance)
 
                 LanguageChoice(appearance)
 
@@ -250,7 +248,7 @@ fun SettingsDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ButtonRow {
                     OutlinedButton(onClick = { savePrefs.launch("szept-ustawienia.json") }) { Text(t("Zapisz do pliku")) }
                     OutlinedButton(onClick = { loadPrefs.launch(arrayOf("application/json", "text/plain", "*/*")) }) {
                         Text(t("Wczytaj"))
@@ -274,7 +272,7 @@ fun SettingsDialog(
                 if (busy) {
                     Text(t("Trwa praca z archiwum…"), style = MaterialTheme.typography.bodySmall)
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ButtonRow {
                         OutlinedButton(onClick = { archiveMode = true }) { Text(t("Zapisz")) }
                         OutlinedButton(onClick = { archiveMode = false }) { Text(t("Wczytaj")) }
                     }

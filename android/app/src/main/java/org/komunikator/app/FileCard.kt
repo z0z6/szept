@@ -139,7 +139,7 @@ fun FileCard(file: FileItem, mine: Boolean, from: String, onDownload: () -> Unit
             ImagePreview(path!!, file.name) { open(context, File(path)) }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ButtonRow {
             when {
                 file.transfer == Transfer.OFFERED -> Button(onClick = onDownload) { Text(t("Pobierz")) }
                 file.transfer == Transfer.FAILED -> Button(onClick = onDownload) { Text(t("Wznów")) }

@@ -1,0 +1,34 @@
+Poprawki ramek i pól (po paczce z językami).
+Rozpakuj w katalogu nadrzędnym repo albo skopiuj zawartość folderu szept/ do repo, nadpisując pliki.
+Jeśli w repo jest folder tools/__pycache__, usuń go: trafił tam przez pomyłkę.
+
+[ZMIENIONY] android/app/src/main/java/org/komunikator/app/FileCard.kt
+[NOWY]      android/app/src/main/java/org/komunikator/app/Layout.kt
+[ZMIENIONY] android/app/src/main/java/org/komunikator/app/MainActivity.kt
+[ZMIENIONY] android/app/src/main/java/org/komunikator/app/Settings.kt
+[ZMIENIONY] android/app/src/main/java/org/komunikator/app/Social.kt
+[ZMIENIONY] android/app/src/main/java/org/komunikator/app/Wallet.kt
+[ZMIENIONY] android/app/src/main/res/raw/i18n_ar.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_de.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_en.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_es.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_fr.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_hi.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_ja.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_pt.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_ru.json
+[ZMIENIONY] android/app/src/main/res/raw/i18n_zh.json
+[ZMIENIONY] crates/desktop/ui/i18n-data.js
+[ZMIENIONY] crates/desktop/ui/index.html
+[ZMIENIONY] crates/desktop/ui/style.css
+[ZMIENIONY] i18n/ar.json
+[ZMIENIONY] i18n/de.json
+[ZMIENIONY] i18n/en.json
+[ZMIENIONY] i18n/es.json
+[ZMIENIONY] i18n/fr.json
+[ZMIENIONY] i18n/hi.json
+[ZMIENIONY] i18n/ja.json
+[ZMIENIONY] i18n/pl.json
+[ZMIENIONY] i18n/pt.json
+[ZMIENIONY] i18n/ru.json
+[ZMIENIONY] i18n/zh.json

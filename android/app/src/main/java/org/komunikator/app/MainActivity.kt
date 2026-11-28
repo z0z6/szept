@@ -94,6 +94,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -727,7 +728,7 @@ private fun MyIdCard(myId: String) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
-                Row {
+                ButtonRow {
                     TextButton(onClick = { clipboard.setText(AnnotatedString(myId)) }) {
                         Text(t("Kopiuj"))
                     }
@@ -987,7 +988,7 @@ private fun ChatScreen(
                         Avatar(title, online, picture)
                         Spacer(Modifier.width(12.dp))
                         Column {
-                            Text(title)
+                            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 when {
                                     group != null -> {
@@ -998,6 +999,8 @@ private fun ChatScreen(
                                     else -> t("Niepołączony, wiadomości poczekają")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }

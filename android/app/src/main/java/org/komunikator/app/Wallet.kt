@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,12 +33,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import uniffi.komunikator_ffi.WalletStatus
 import uniffi.komunikator_ffi.defaultNanoNodes
@@ -133,17 +137,7 @@ fun WordsDialog(model: Messenger, exists: Boolean, onDismiss: () -> Unit) {
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    words.chunked(2).forEachIndexed { row, pair ->
-                        Row {
-                            pair.forEachIndexed { column, word ->
-                                Text(
-                                    "${row * 2 + column + 1}. $word",
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                    }
+                    WordsGrid(words)
                 } else {
                     Text(t("Sprawdźmy, czy masz kopię. Wpisz słowa o tych numerach:"))
                     quiz.forEachIndexed { index, position ->
@@ -178,6 +172,33 @@ fun WordsDialog(model: Messenger, exists: Boolean, onDismiss: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(t("Później")) } },
     )
+}
+
+/**
+ * The 24 words in as many columns as fit: the longest word ("24. " and eight
+ * letters) is measured in the text size in use, so nothing runs into the
+ * next column, however large the text.
+ */
+@Composable
+private fun WordsGrid(words: List<String>) {
+    val style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace)
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val cell = with(density) { measurer.measure("24. wwwwwwww", style).size.width.toDp() } + 12.dp
+    // The dialog keeps 48 dp from the screen's edges and 48 dp of padding inside.
+    val width = (LocalConfiguration.current.screenWidthDp.dp - 96.dp).coerceIn(120.dp, 464.dp)
+    val columns = (width / cell).toInt().coerceIn(1, 3)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        words.chunked(columns).forEachIndexed { row, group ->
+            Row {
+                group.forEachIndexed { column, word ->
+                    val number = (row * columns + column + 1).toString().padStart(2)
+                    Text("$number. $word", style = style, softWrap = false, modifier = Modifier.weight(1f))
+                }
+                repeat(columns - group.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
 }
 
 /** Address, balance and what can be done with them. */
@@ -222,11 +243,9 @@ fun WalletDialog(
                 if (waiting != null && waiting != "0") {
                     Text(t("Czeka na odebranie: {receivable} XNO", "receivable" to waiting), style = MaterialTheme.typography.bodySmall)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ButtonRow {
                     OutlinedButton(onClick = onRefresh) { Text(t("Odśwież")) }
                     OutlinedButton(onClick = onReceive) { Text(t("Odbierz")) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onSend) { Text(t("Wyślij na adres")) }
                     OutlinedButton(onClick = onWords) { Text(t("24 słowa")) }
                 }
@@ -424,7 +443,7 @@ fun WalletSettings(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    ButtonRow {
         OutlinedButton(onClick = onToggle) { Text(if (wallet?.enabled == true) t("Wyłącz") else t("Włącz")) }
         OutlinedButton(onClick = onRestore) { Text(t("Przywróć")) }
         if (wallet?.exists == true) {
