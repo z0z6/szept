@@ -56,19 +56,41 @@ Pobrane pliki trafiają do `Pobrane/Szept` na komputerze i do prywatnej pamięci
 
 - **Czat grupowy** bez serwera: wiadomość idzie od autora prosto do każdego członka (do 32 osób). Członkowie, którzy nie mają się nawzajem w kontaktach, łączą się wyłącznie w sprawach grupy: prywatnych wiadomości od siebie nie przyjmą. Grupę zmienia tylko właściciel; gdy ją opuszcza, grupa się zamyka. Zaproszenie dojdzie też do osób, które są teraz offline. Wiadomość jest „dostarczona”, gdy potwierdzą ją wszyscy. Uwaga: autor musi mieć Szept włączony, dopóki każdy odbiorca jej nie dostanie.
 - **Twoje imię** w ustawieniach: widzą je kontakty i członkowie grup, którzy znają Cię tylko z grupy.
-- **Reakcje i naklejki – Szeptusie.** Zamiast emotek: rodzina rysowanych wektorowo, animowanych postaci (Pierożek miłości, Ogórek, który kisi się ze śmiechu, Ziemniak w szoku, Mózg, który paruje, Kapcie, które spadły…). Na każdą wiadomość – tekst, plik, głosówkę, GIF, naklejkę – można zareagować jedną z dziesięciu; dwanaście większych scenek z podpisami wysyła się jako osobne naklejki. Rysunki powstają z jednego źródła, `tools/figures.py`, które zapisuje dane dla obu aplikacji: po zmianie uruchom `python3 tools/figures.py`.
+- **Reakcje i naklejki – Szeptusie.** Zamiast emotek: rodzina rysowanych wektorowo, animowanych postaci (Pierożek miłości, Ogórek, który kisi się ze śmiechu, Ziemniak w szoku, Mózg, który paruje, Kapcie, które spadły, Banan na twarzy, Śledź, który śledzi temat, Jeż najeżony, Ser z dziurami w pamięci, Budzik, który już leci…). Na każdą wiadomość – tekst, plik, głosówkę, GIF, naklejkę – można zareagować jedną z piętnastu; 27 większych scenek z podpisami wysyła się jako osobne naklejki. Starsze wersje Szeptu nie znają nowych postaci i pokażą w ich miejscu puste pole. Rysunki powstają z jednego źródła, `tools/figures.py`, które zapisuje dane dla obu aplikacji: po zmianie uruchom `python3 tools/figures.py`.
 - **Nowy klucz kontaktu.** Gdy ktoś zainstaluje Szept od nowa, dostaje nowy identyfikator. Opcja „Nowy klucz” przy kontakcie przenosi go na ten identyfikator: stara rozmowa kończy się notką, nowa toczy się pod nią, a grupy, których jesteś właścicielem, też dostają nowy klucz. Sprawdź nowy identyfikator innym kanałem, bo podesłać „nowy klucz” może każdy.
 - **Archiwum.** W ustawieniach: „Zapisz archiwum” tworzy jeden plik `.szept` z kontaktami, grupami, imionami, zdjęciami, rozmowami (z reakcjami, głosówkami i GIF-ami; zwykłe pliki tylko z nazwy) i Twoimi ustawieniami. Opcjonalnie zawiera klucz tożsamości – wtedy po reinstalacji „Wczytaj archiwum” przywraca ten sam identyfikator i kontakty nie muszą nic robić. Wczytanie dokłada dane do istniejących, niczego nie usuwa.
 - **Szyfrowanie archiwum.** Klucz powstaje z hasła przez Argon2id ze 128 MiB pamięci i trzema przebiegami, więc każda próba odgadnięcia hasła jest kosztowna; treść szyfruje XChaCha20-Poly1305 z 256-bitowym kluczem. Ustawienia Argon2id są zapisane w nagłówku i uwierzytelnione razem z nim (nie da się ich po cichu osłabić), treść jest dopełniana do wielokrotności 64 KiB (rozmiar pliku nie zdradza, ile jest rozmów), a klucz i odszyfrowane dane są czyszczone z pamięci. Hasło musi mieć co najmniej 12 znaków i nie może być łatwe do odgadnięcia (aplikacja ocenia je na bieżąco); przycisk „Wymyśl mocne hasło” tworzy hasło z siedmiu losowych słów i liczby, ok. 66 bitów. Archiwa ze starszej wersji nadal się otwierają.
-- **Twoje ustawienia** (motyw, jasność, rozmiar tekstu, dźwięki) zapisują się same na urządzeniu. W ustawieniach można je też zapisać do zwykłego pliku `szept-ustawienia.json` i wczytać po reinstalacji albo na innym urządzeniu – format jest wspólny dla komputera i Androida. Nie zawierają nic tajnego.
+- **Twoje ustawienia** (motyw, jasność, rozmiar tekstu, dźwięki i podgląd w powiadomieniach) zapisują się same na urządzeniu. W ustawieniach można je też zapisać do zwykłego pliku `szept-ustawienia.json` i wczytać po reinstalacji albo na innym urządzeniu – format jest wspólny dla komputera i Androida. Nie zawierają nic tajnego.
 - Starsze wersje Szeptu nie znają nowych ramek: nie zobaczą grup, reakcji ani naklejek, ale zwykłe wiadomości działają dalej.
+
+## Portfel Nano (XNO), opcjonalny
+
+Szept ma wbudowany portfel kryptowaluty [Nano](https://nano.org): przelewy bez opłat, które docierają w kilka sekund. Jest wyłączony, dopóki go nie włączysz, i bez niego komunikator działa jak dotąd.
+
+- **Włączenie** (ustawienia → „Portfel Nano” → „Włącz”) tworzy portfel i od razu pokazuje jego 24 słowa. Aplikacja prosi o wpisanie trzech z nich, żeby upewnić się, że masz kopię; dopóki jej nie potwierdzisz, przypomina o tym na liście kontaktów.
+- **Standardowy seed Nano.** 24 słowa to BIP39 z seedem jako entropią, a konto to indeks 0, tak jak w Nault i Natrium. Te same słowa otwierają ten sam portfel w każdym portfelu Nano, a słowa z innego portfela przywracają go w Szepcie („Przywróć”).
+- **Seed nigdy nie przepada.** Leży w `wallet.seed` obok klucza tożsamości (prawa tylko dla właściciela) i nie jest nigdy nadpisywany: wyłączenie portfela tylko go ukrywa, a przywrócenie innego odkłada poprzedni do pliku `wallet-<czas>.seed.old`. Seed trafia też zawsze do zaszyfrowanego archiwum `.szept`, a wczytanie archiwum go przywraca.
+- **Płatności w rozmowie.** Gdy portfel jest włączony, kontakty dostają Twój adres przy połączeniu, a w rozmowie z kontaktem, który też ma portfel, pojawia się przycisk Ӿ. Adres przychodzi uwierzytelnionym połączeniem od klucza kontaktu, więc nikt po drodze nie podmieni go na swój. Po wysłaniu odbiorca dostaje kartę z kwotą i hashem bloku; jego aplikacja sprawdza w sieci Nano, czy taki przelew do niego istnieje i jest potwierdzony, a fałszywą kartę oznacza jako niewiarygodną. Przelewy w grupach nie są obsługiwane.
+- **Odbieranie** dzieje się samo co minutę, gdy Szept działa, i od razu po płatności od kontaktu. Można też wysłać środki na dowolny adres Nano, np. do innego portfela.
+- **Dowód pracy** (antyspam Nano) liczy się na urządzeniu i równolegle jest zamawiany u węzła; wygrywa pierwszy poprawny wynik, sprawdzany lokalnie. Po każdym przelewie Szept liczy z wyprzedzeniem pracę dla następnego, żeby kolejna płatność wyszła od razu. Bez pomocy węzła wysyłka na telefonie może trwać do minuty.
+- **Węzły.** Portfel rozmawia z siecią Nano przez RPC publicznych węzłów (domyślnie `rpc.nano.to`, `node.somenano.com`, `rainstorm.city`, `nanoslo.0x.no`, próbowanych po kolei) albo przez Twój własny węzeł, ustawiany w „Węzły”. Węzeł dostaje tylko podpisane bloki, nigdy klucza, ale widzi Twój adres IP i adres portfela. Połączenie z nim to HTTPS z tą samą hybrydową wymianą kluczy co reszta Szeptu; zwykłe `http://` jest dozwolone tylko dla węzła w sieci lokalnej.
+- **Reprezentant** nowego konta jest losowany spośród aktywnych reprezentantów z realnym, ale nie dominującym udziałem w głosowaniu, zgodnie z zaleceniem dokumentacji Nano.
+
+To portfel na drobne kwoty: przelewów nie da się cofnąć, a seed, jak klucz tożsamości, nie jest jeszcze szyfrowany na dysku (patrz „Bezpieczeństwo”). Starsze wersje Szeptu pomijają adresy i karty płatności.
+
+## Języki
+
+Szept mówi po polsku i w dziesięciu najpopularniejszych językach świata: angielskim, chińskim (uproszczonym), hindi, hiszpańskim, francuskim, arabskim, portugalskim, rosyjskim, japońskim i niemieckim. Domyślnie wybiera język systemu (a gdy go nie zna, angielski); w ustawieniach można wybrać inny. Po arabsku cały interfejs biegnie od prawej do lewej. Wybór języka trafia do pliku ustawień i do archiwum.
+
+Teksty są w kodzie po polsku, w `t("…")`, i to polski tekst jest kluczem tłumaczenia. Tłumaczenia leżą w jednym miejscu, `i18n/<kod>.json`, wspólnym dla komputera i Androida. `python3 tools/i18n.py` zbiera wszystkie teksty z kodu, stron HTML, Szeptusiów i dźwięków, sprawdza, czy każdy język ma każdy tekst z tymi samymi `{znacznikami}`, i zapisuje dane dla obu aplikacji; `python3 tools/i18n.py missing` wypisuje, czego brakuje. Brakujące tłumaczenie pokazuje się po polsku. Nowy język to nowy plik w `i18n/` (szablon: `i18n/pl.json`) i jedna linijka w `tools/i18n.py`. Tłumaczenia przygotowała maszyna: przed szerokim wydaniem warto dać je do przejrzenia osobom, dla których to język ojczysty.
 
 ## Wspólne dla aplikacji okienkowych
 
 - Każdy ma swój kod QR z identyfikatorem (`szept:<identyfikator>`). Kontakt dodaje się, skanując kod drugiej osoby aparatem lub kamerą internetową, wczytując obraz z kodem (na komputerze) albo wklejając identyfikator.
 - Dodanie działa w jedną stronę: druga osoba też musi dodać Ciebie, bo Szept przyjmuje połączenia tylko od zapisanych kontaktów.
 - Każdy kontakt ma osobną rozmowę. Twoje wiadomości mają status: w kolejce, wysłano (✓) i dostarczono (✓✓).
-- Nowa wiadomość w rozmowie, której nie masz przed oczami, daje powiadomienie systemowe i licznik nieprzeczytanych. Powiadomienie pokazuje nadawcę, nigdy treść.
+- Nowa wiadomość w rozmowie, której nie masz przed oczami, daje powiadomienie systemowe i licznik nieprzeczytanych. Powiadomienie pokazuje nadawcę z jego zdjęciem i początek wiadomości (w grupie: kto napisał). Podgląd treści można wyłączyć w ustawieniach („Dźwięk i powiadomienia”); na Androidzie zablokowany ekran i tak pokazuje tylko „Nowa wiadomość”, a treść widać po odblokowaniu, w stylu rozmowy z kilkoma ostatnimi wiadomościami.
+- **Dźwięki.** Dziesięć własnych dźwięków nowej wiadomości do wyboru (Bąbelek, Psst!, Kropelka, Ćwierk, Kalimba, Kum-kum, Boing!, Monetka, Pyk, Dzyń) albo cisza, z odsłuchem w ustawieniach. Do tego „fiu” przy wysłaniu i „kaching” przy płatności Nano. Wszystkie powstają z matematyki w jednym skrypcie, `tools/sounds.py`, bez nagrań i bez zależności: po zmianie uruchom `python3 tools/sounds.py`, a pliki WAV trafią do obu aplikacji. Na komputerze dźwięk gra Szept, a powiadomienie systemowe jest ciche; na Androidzie dźwięk należy do kanału powiadomień (zmiana dźwięku tworzy nowy kanał).
 - Emoji to zwykłe znaki Unicode rysowane systemową czcionką.
 
 Wiadomości i pliki przychodzą także w tle, przez Wi‑Fi i dane mobilne: na komputerze, dopóki okno Szeptu jest otwarte (choćby zminimalizowane), na Androidzie, dopóki aplikacja nie zostanie wyłączona przyciskiem „Wyłącz” w jej powiadomieniu albo zatrzymana w ustawieniach systemu. Po zmianie sieci Szept od razu łączy się ponownie. Historia rozmów żyje w pamięci do zamknięcia aplikacji.
@@ -104,6 +126,7 @@ Build lokalny: w `crates/desktop` uruchom `npm ci`, a potem `npx tauri build`. N
 - Urządzenia łączą się bezpośrednio przez QUIC ([iroh](https://github.com/n0-computer/iroh)), adresowane kluczem publicznym.
 - W trybie domyślnym pomagają dwa rodzaje publicznych serwerów projektu iroh: wyszukiwanie adresu po kluczu oraz przekaźnik (relay) dla sieci, których NAT nie da się przebić. Widzą, kto z kim się łączy, nie widzą treści. Oba można zastąpić własnymi.
 - W trybie `--local` program nie kontaktuje się z niczym poza rozmówcą.
+- Włączony portfel Nano łączy się dodatkowo z węzłem Nano (patrz „Portfel Nano”). Wyłączony nie łączy się z niczym.
 
 ## Bezpieczeństwo
 
@@ -122,7 +145,7 @@ Co jest:
 Czego jeszcze nie ma:
 
 - Double Ratchet nad transportem (ochrona wiadomości czekających w kolejce i zapisanych);
-- szyfrowania danych na dysku: klucz leży w pliku `identity.key` z prawami tylko dla właściciela, a pobrane pliki leżą w zwykłym folderze. Przed kimś, kto dostanie Twój komputer lub telefon do ręki, chroni dziś tylko szyfrowanie całego dysku (LUKS, BitLocker, FileVault, szyfrowanie Androida) i blokada ekranu;
+- szyfrowania danych na dysku: klucz leży w pliku `identity.key` (a seed portfela Nano w `wallet.seed`) z prawami tylko dla właściciela, a pobrane pliki leżą w zwykłym folderze. Przed kimś, kto dostanie Twój komputer lub telefon do ręki, chroni dziś tylko szyfrowanie całego dysku (LUKS, BitLocker, FileVault, szyfrowanie Androida) i blokada ekranu;
 - podpisów odpornych na komputery kwantowe: tożsamość to nadal Ed25519. To zagraża tylko podszywaniu się w przyszłości, nie poufności nagranego dziś ruchu;
 - ukrycia adresu IP przed kontaktami; publiczne serwery pomocnicze iroh widzą, kto z kim się łączy (tryb `--local` albo własny przekaźnik tego unika);
 - niezależnego audytu.
@@ -142,6 +165,9 @@ GitHub Actions (`.github/workflows/ci.yml`) przy każdym pushu sprawdza format, 
 
 ```
 crates/core     biblioteka: tożsamość, kontakty, protokół, sieć
+crates/nano     portfel Nano: seed i 24 słowa, adresy, bloki, dowód pracy, RPC
+i18n            tłumaczenia: jeden plik JSON na język
+tools           źródła Szeptusiów, dźwięków i tłumaczeń (figures.py, sounds.py, i18n.py)
 crates/cli      klient terminalowy
 crates/ffi      most dla aplikacji graficznych (UniFFI): kolejka, ponawianie połączeń, kody QR
 crates/desktop  aplikacja okienkowa na Linuksa, Windows i macOS (Tauri)

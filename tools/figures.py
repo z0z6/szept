@@ -25,6 +25,7 @@ A negative `rise` falls instead.
 """
 
 import json
+import math
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -374,10 +375,280 @@ figure("paczek", "Pączuś na pocieszenie", "Pączuś na pocieszenie", [
     ], ("sway", 1800, 6, 0), origin=(32, 54)),
 ])
 
+# Serducho: a heart beating for you.
+figure("serce", "Serducho", "Bije dla Ciebie", [
+    part([
+        ("p", "M32 53 C15 42 8 32 11 22 C14 13 26 11 32 20 C38 11 50 13 53 22 C56 32 49 42 32 53 Z",
+         "#ff4d6d", "#c9184a", 1.6),
+        ("e", 19, 23, 3.2, 2, "#ff8fa3", None, 0),
+        ("c", 26, 30, 2.2, INK, None, 0),
+        ("c", 38, 30, 2.2, INK, None, 0),
+        ("c", 26.8, 29.2, 0.8, WHITE, None, 0),
+        ("c", 38.8, 29.2, 0.8, WHITE, None, 0),
+        *blush((21, 36), (43, 36)),
+        line("M28.5 36 Q32 40 35.5 36"),
+    ], ("pulse", 900, 0.08, 0), origin=(32, 34)),
+])
+
+# Płomyk: things are on fire, in the good sense.
+figure("ogien", "Ale ogień!", "Ale ogień!", [
+    part([
+        ("p", "M32 57 C19 57 12 48 14 37 C16 28 22 25 22 16 C28 19 31 25 30 31 C34 24 37 17 35 7 "
+              "C46 13 53 26 51 40 C50 51 42 57 32 57 Z", "#ff7a1a", "#d9480f", 1.6),
+        ("p", "M32 55 C25 55 21 49 23 42 C25 36 29 35 30 30 C35 34 42 40 41 47 C40 52 36 55 32 55 Z",
+         "#ffd43b", None, 0),
+        ("c", 28.5, 44, 1.9, INK, None, 0),
+        ("c", 35.5, 44, 1.9, INK, None, 0),
+        line("M29.5 48.5 Q32 51 34.5 48.5"),
+    ], ("sway", 1100, 4, 0), origin=(32, 57)),
+    part([("c", 47, 18, 1.8, "#ffd43b", "#f59f00", 0.8)], ("rise", 1400, 9, 0), origin=(47, 18)),
+    part([("c", 17, 22, 1.4, "#ffd43b", "#f59f00", 0.8)], ("rise", 1700, 8, 0.5), origin=(17, 22)),
+])
+
+# Banan: the Polish "banan na twarzy", a grin from ear to ear.
+figure("banan", "Banan na twarzy", "Banan na twarzy", [
+    part([
+        ("p", "M13 18 C10 38 22 54 42 53 C49 53 55 49 56 44 C54 42 52 42 50 43 C38 47 25 38 21 19 "
+              "C20 15 14 14 13 18 Z", "#ffd43b", "#c99a06", 1.6),
+        ("r", 12, 11, 6, 6, 1.5, "#6b4f2a", None, 0),
+        ("c", 54.5, 44, 1.6, "#6b4f2a", None, 0),
+        ("c", 25, 37, 2, INK, None, 0),
+        ("c", 32, 42, 2, INK, None, 0),
+        ("p", "M25 43 Q29 51 38 47", None, INK, 1.8),
+        ("e", 22, 43, 2.4, 1.5, BLUSH, None, 0),
+        ("e", 38, 51, 2.4, 1.5, BLUSH, None, 0),
+    ], ("sway", 1500, 6, 0), origin=(34, 52)),
+])
+
+# Żarówka: a lightbulb moment.
+figure("zarowka", "Mam pomysł!", "Mam pomysł!", [
+    part([
+        line("M32 3 V8", "#f59f00", 2.2),
+        line("M13 10 L16.5 13.5", "#f59f00", 2.2),
+        line("M51 10 L47.5 13.5", "#f59f00", 2.2),
+        line("M6 26 H11", "#f59f00", 2.2),
+        line("M58 26 H53", "#f59f00", 2.2),
+    ], ("pulse", 900, 0.15, 0), origin=(32, 26)),
+    part([
+        ("c", 32, 26, 14, "#fff3bf", "#e0a800", 1.6),
+        ("r", 25, 38, 14, 5, 2, "#ced4da", "#868e96", 1.2),
+        ("r", 26.5, 43, 11, 4, 2, "#ced4da", "#868e96", 1.2),
+        ("r", 29, 47, 6, 3, 1.5, "#868e96", None, 0),
+        ("c", 27, 25, 2, INK, None, 0),
+        ("c", 37, 25, 2, INK, None, 0),
+        ("c", 27.7, 24.3, 0.7, WHITE, None, 0),
+        ("c", 37.7, 24.3, 0.7, WHITE, None, 0),
+        ("p", "M27.5 30 Q32 35.5 36.5 30 Z", "#7a2034", INK, 1.2),
+        *blush((23, 30), (41, 30)),
+    ], ("hop", 1800, 2.5, 0), origin=(32, 50)),
+])
+
+# Duszek: off he goes without a word.
+figure("duch", "Znikam po angielsku", "Znikam po angielsku", [
+    part([
+        ("p", "M15 53 V28 C15 16 23 9 32 9 C41 9 49 16 49 28 V53 L43.5 48 L38 53 L32 48 L26 53 L20.5 48 Z",
+         "#f8f9fa", "#adb5bd", 1.6),
+        ("e", 26, 27, 2.4, 3.4, INK, None, 0),
+        ("e", 38, 27, 2.4, 3.4, INK, None, 0),
+        ("c", 26.8, 25.8, 0.8, WHITE, None, 0),
+        ("c", 38.8, 25.8, 0.8, WHITE, None, 0),
+        ("e", 32, 37, 2.6, 3.2, "#4a1d2a", None, 0),
+        *blush((21, 33), (43, 33)),
+        line("M15 36 Q9 34 8 28", "#adb5bd", 1.6),
+        line("M49 36 Q55 34 56 28", "#adb5bd", 1.6),
+    ], ("bob", 1800, 3.5, 0), origin=(32, 53)),
+])
+
+# Jeż: bristling.
+figure("jez", "Jestem najeżony", "Jestem najeżony", [
+    part([
+        ("p", "M12 42 L9 33 L16 34 L14 25 L21 28 L22 18 L28 23 L31 13 L35 22 L40 14 L42 24 L48 19 "
+              "L47 28 L54 27 L50 34 L56 38 Z", "#6b4f2a", "#4a3520", 1.4),
+        ("e", 32, 42, 19, 12, "#d8b48a", "#8a6233", 1.6),
+        ("e", 47, 45, 7, 5.5, "#f1d3b3", "#8a6233", 1.2),
+        ("c", 53.5, 44, 2.1, INK, None, 0),
+        ("c", 42, 39, 2, INK, None, 0),
+        line("M37.5 34.5 L45 37", INK, 2),
+        line("M43.5 50 Q46.5 48 49.5 50"),
+        ("e", 38, 46, 2.6, 1.6, BLUSH, None, 0),
+        ("e", 22, 52, 3, 2, "#8a6233", None, 0),
+        ("e", 40, 53, 3, 2, "#8a6233", None, 0),
+    ], ("shake", 600, 0.9, 0)),
+])
+
+# Żaba: croaking with laughter.
+figure("zaba", "Rechoczę", "Rechoczę ze śmiechu", [
+    part([
+        ("c", 22, 24, 7.5, "#69db7c", "#2f9e44", 1.6),
+        ("c", 42, 24, 7.5, "#69db7c", "#2f9e44", 1.6),
+        ("e", 32, 40, 21, 14, "#69db7c", "#2f9e44", 1.6),
+        ("c", 22, 24, 4.2, WHITE, None, 0),
+        ("c", 42, 24, 4.2, WHITE, None, 0),
+        line("M19.5 25 Q22 22 24.5 25", INK, 2),
+        line("M39.5 25 Q42 22 44.5 25", INK, 2),
+        ("p", "M18 38 Q32 55 46 38 Q32 44 18 38 Z", "#c92a2a", INK, 1.4),
+        ("e", 32, 46.5, 4, 2.2, BLUSH, None, 0),
+        *blush((15, 36), (49, 36)),
+        ("e", 20, 54, 5, 2.4, "#40c057", "#2f9e44", 1.2),
+        ("e", 44, 54, 5, 2.4, "#40c057", "#2f9e44", 1.2),
+    ], ("hop", 1100, 5, 0), origin=(32, 56)),
+])
+
+# Księżyc: off to bed.
+figure("ksiezyc", "Dobranoc", "Lecę spać", [
+    part([
+        ("p", "M40 8 C25 10 15 22 17 36 C19 50 33 58 47 53 C35 49 28 40 29 29 C30 20 34 13 40 8 Z",
+         "#ffe066", "#f59f00", 1.6),
+        line("M21.5 31 Q24 33.5 26.5 31"),
+        line("M24 41 Q27 43.5 30 41"),
+        ("e", 21, 37, 2.4, 1.5, BLUSH, None, 0),
+        ("c", 46, 26, 1.3, "#ffe066", None, 0),
+        ("c", 52, 40, 1, "#ffe066", None, 0),
+    ], ("sway", 3200, 5, 0), origin=(32, 32)),
+    part([line("M44 14 H50 L44 20 H50", INK, 1.6)], ("rise", 2400, 8, 0), origin=(47, 17)),
+    part([line("M51 6 H55 L51 10 H55", INK, 1.4)], ("rise", 2400, 6, 0.5), origin=(53, 8)),
+])
+
+# Słoneczko: good morning!
+_RAYS = " ".join(
+    "M{:.1f} {:.1f} L{:.1f} {:.1f} L{:.1f} {:.1f} Z".format(
+        32 + 18 * math.cos(a - 0.2), 32 + 18 * math.sin(a - 0.2),
+        32 + 28 * math.cos(a), 32 + 28 * math.sin(a),
+        32 + 18 * math.cos(a + 0.2), 32 + 18 * math.sin(a + 0.2),
+    )
+    for a in (i * math.pi / 5 for i in range(10))
+)
+figure("slonce", "Dzień dobry!", "Dzień dobry, słoneczko!", [
+    part([("p", _RAYS, "#ffa94d", "#f76707", 1.2)], ("spin", 9000, 0, 0)),
+    part([
+        ("c", 32, 32, 15, "#ffd43b", "#f59f00", 1.6),
+        ("c", 27, 29, 2.1, INK, None, 0),
+        ("c", 37, 29, 2.1, INK, None, 0),
+        ("c", 27.7, 28.3, 0.7, WHITE, None, 0),
+        ("c", 37.7, 28.3, 0.7, WHITE, None, 0),
+        ("p", "M26.5 35 Q32 41 37.5 35 Z", "#7a2034", INK, 1.2),
+        *blush((22, 35), (42, 35)),
+    ], ("pulse", 2000, 0.05, 0)),
+])
+
+# Budzik: late again.
+figure("budzik", "Już lecę!", "Już lecę, spóźniam się", [
+    part([
+        ("c", 18, 17, 6, "#ffd43b", "#f59f00", 1.4),
+        ("c", 46, 17, 6, "#ffd43b", "#f59f00", 1.4),
+        line("M22 52 L18 57", INK, 2.2),
+        line("M42 52 L46 57", INK, 2.2),
+        ("c", 32, 36, 18, "#ff6b6b", "#c92a2a", 1.6),
+        ("c", 32, 36, 13, WHITE, "#c92a2a", 1.2),
+        line("M32 25 V27.5", "#adb5bd", 1.4),
+        line("M32 44.5 V47", "#adb5bd", 1.4),
+        line("M21 36 H23.5", "#adb5bd", 1.4),
+        line("M40.5 36 H43", "#adb5bd", 1.4),
+        ("c", 27.5, 33, 3, WHITE, INK, 1.1),
+        ("c", 36.5, 33, 3, WHITE, INK, 1.1),
+        ("c", 27.5, 33.5, 1.3, INK, None, 0),
+        ("c", 36.5, 33.5, 1.3, INK, None, 0),
+        ("e", 32, 41, 2.2, 2.6, "#4a1d2a", None, 0),
+        line("M28 12 L32 15 L36 12", "#868e96", 1.6),
+    ], ("shake", 300, 1.4, 0)),
+    part([("p", "M56 30 Q53 35 56 37 Q59 35 56 30 Z", "#7fd3ff", "#3d9bd1", 0.8)], ("rise", 1300, -6, 0),
+         origin=(56, 34)),
+])
+
+# Pomidor: blushing all over.
+figure("pomidor", "Aż się czerwienię", "Aż się czerwienię", [
+    part([
+        ("e", 32, 39, 20, 17, "#fa5252", "#c92a2a", 1.6),
+        ("e", 22, 31, 3.5, 2.2, "#ff8787", None, 0),
+        ("p", "M32 24 L26 19 L30.5 20 L29 14 L32.5 18.5 L36 13 L35.5 19.5 L40 18 L36 22.5 Z",
+         "#51cf66", "#2b8a3e", 1.2),
+        line("M32 18 V12", "#2b8a3e", 2),
+        line("M24 38 Q27 35.5 30 38"),
+        line("M34 38 Q37 35.5 40 38"),
+        ("e", 21.5, 44, 4.2, 2.6, "#c92a2a", None, 0),
+        ("e", 42.5, 44, 4.2, 2.6, "#c92a2a", None, 0),
+        line("M29.5 45 Q32 47 34.5 45"),
+    ], ("pulse", 1500, 0.05, 0), origin=(32, 56)),
+])
+
+# Śledź: following the topic closely.
+figure("sledz", "Śledzę temat", "Śledzę temat", [
+    part([
+        ("p", "M7 32 C14 20 34 17 45 27 L57 19 L54 32 L57 45 L45 37 C34 47 14 44 7 32 Z",
+         "#a5b4c8", "#5c6f87", 1.6),
+        ("p", "M12 35 C22 41 34 41 43 35", None, "#dee2e6", 2.2),
+        line("M24 25 Q20.5 32 24 39", "#5c6f87", 1.4),
+        ("p", "M30 22 L35 15 L38 24 Z", "#8193ab", "#5c6f87", 1.2),
+        ("c", 16, 29, 4.6, WHITE, INK, 1.2),
+        ("c", 14.6, 29, 2.2, INK, None, 0),
+        ("c", 14, 28.3, 0.7, WHITE, None, 0),
+        line("M9 35.5 Q11 36.5 13 35.5"),
+        ("c", 28, 30, 6.5, None, "#495057", 1.8),
+        line("M32.6 34.6 L38 40", "#495057", 2.4),
+    ], ("sway", 2200, 5, 0)),
+])
+
+# Grzybek: gone mushrooming.
+figure("grzyb", "Idę na grzyby", "Idę na grzyby", [
+    part([
+        ("r", 22, 28, 20, 24, 7, "#fff4e6", "#d9b38c", 1.6),
+        ("p", "M8 32 C8 17 20 8 32 8 C44 8 56 17 56 32 C47 34 17 34 8 32 Z", "#e03131", "#a51111", 1.6),
+        ("c", 21, 20, 3, WHITE, None, 0),
+        ("c", 35, 14.5, 2.4, WHITE, None, 0),
+        ("c", 45, 23, 3.2, WHITE, None, 0),
+        ("c", 29, 26, 1.7, WHITE, None, 0),
+        ("c", 27.5, 39, 2, INK, None, 0),
+        ("c", 36.5, 39, 2, INK, None, 0),
+        ("c", 28.2, 38.3, 0.7, WHITE, None, 0),
+        ("c", 37.2, 38.3, 0.7, WHITE, None, 0),
+        line("M29 44 Q32 47 35 44"),
+        *blush((24, 44), (40, 44)),
+    ], ("hop", 1300, 4, 0), origin=(32, 52)),
+])
+
+# Kawa: do not talk to me before coffee.
+figure("kawa", "Bez kawy nie gadam", "Bez kawy nie gadam", [
+    part([
+        ("p", "M44 31 C53 31 53 45 44 45", None, "#868e96", 3),
+        ("p", "M14 27 H46 V46 C46 52 41 56 35 56 H25 C19 56 14 52 14 46 Z", "#f8f9fa", "#868e96", 1.6),
+        ("e", 30, 27, 16, 3.2, "#6f4518", "#868e96", 1.2),
+        ("c", 24.5, 38, 4, WHITE, INK, 1.2),
+        ("c", 35.5, 38, 4, WHITE, INK, 1.2),
+        ("c", 24.5, 38, 1.2, INK, None, 0),
+        ("c", 35.5, 38, 1.2, INK, None, 0),
+        line("M21 47.5 L23.5 46 L26 47.5 L28.5 46 L31 47.5 L33.5 46 L36 47.5 L38.5 46"),
+    ], ("shake", 220, 0.7, 0)),
+    part([line("M25 21 C22 17 28 14 25 9", "#adb5bd", 1.6)], ("rise", 2000, 5, 0), origin=(25, 15)),
+    part([line("M34 21 C31 17 37 14 34 9", "#adb5bd", 1.6)], ("rise", 2000, 5, 0.5), origin=(34, 15)),
+])
+
+# Ser: holes in my memory.
+figure("ser", "Mam dziury w pamięci", "Mam dziury w pamięci", [
+    part([
+        ("p", "M7 39 L47 19 L57 29 V52 H7 Z", "#ffd43b", "#e0a800", 1.6),
+        ("p", "M7 39 L47 19 L57 29 L17 49 Z", "#ffe066", "#e0a800", 1.2),
+        ("c", 12, 46, 2.2, "#fab005", None, 0),
+        ("c", 50, 44, 3, "#fab005", None, 0),
+        ("e", 40, 26, 3, 1.6, "#fab005", None, 0),
+        ("c", 25, 37, 1.8, "#fab005", None, 0),
+        ("c", 29, 44, 2.6, WHITE, INK, 1.1),
+        ("c", 38, 40, 2.6, WHITE, INK, 1.1),
+        ("c", 29.6, 43.2, 1.1, INK, None, 0),
+        ("c", 38.6, 39.2, 1.1, INK, None, 0),
+        line("M32 50 Q35 48 38 49"),
+    ], ("sway", 2600, 3, 0), origin=(32, 52)),
+    part([
+        line("M48 8 C48 4 55 4 55 8 C55 11 51.5 11 51.5 14"),
+        ("c", 51.5, 17, 0.9, INK, None, 0),
+    ], ("bob", 1200, 2, 0), origin=(51.5, 12)),
+])
+
 # Reactions are the small, quick ones; stickers the big scenes with captions.
-REACTIONS = ["pierog", "ogorek", "ziemniak", "mozg", "rakieta", "kaktus", "chmurka", "slimak", "kapec", "kot"]
+REACTIONS = ["pierog", "serce", "ogorek", "banan", "ogien", "ziemniak", "mozg", "zarowka", "rakieta", "kaktus",
+             "chmurka", "slimak", "sledz", "kapec", "kot"]
 STICKERS = ["pierog", "ogorek", "ziemniak", "mozg", "rakieta", "kot", "herbatka", "tost", "jajo", "dino",
-            "balon", "paczek"]
+            "balon", "paczek", "serce", "ogien", "banan", "zarowka", "duch", "jez", "zaba", "ksiezyc", "slonce",
+            "budzik", "pomidor", "sledz", "grzyb", "kawa", "ser"]
 
 
 def color(value):
