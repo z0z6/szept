@@ -25,7 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tauri = { version = "2.12", features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.8.3"
-tauri-plugin-notification = "~2.7.0"
+tauri-plugin-notification = "~2.8.1"
 tauri-plugin-opener = "=2.7.3"
 
 # Lets the scanner use the camera inside WebKitGTK.
