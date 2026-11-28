@@ -18,7 +18,11 @@ tauri-build = { version = "2.7", features = [] }
 # Profile pictures reach the windows as data: URLs.
 base64 = "0.22"
 komunikator-ffi = { path = "../ffi" }
+# Notifications with the sender's picture and no system sound (the app
+# plays its own). Already in the tree through the notification plugin.
+notify-rust = "4.19"
 serde = { workspace = true }
+serde_json = { workspace = true }
 tauri = { version = "2.12", features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.8.3"
 tauri-plugin-notification = "~2.7.0"

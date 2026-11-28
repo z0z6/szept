@@ -72,6 +72,19 @@ pub struct FileInfo {
     pub duration_ms: Option<u32>,
 }
 
+/// A Nano payment told about in a conversation.
+#[derive(Debug, Clone, Serialize)]
+pub struct PaymentInfo {
+    /// The hash of the send block, in hex.
+    pub block: String,
+    /// In XNO, such as "1.5".
+    pub amount: String,
+    pub amount_raw: String,
+    /// Ours: "sent". Theirs: "checking", then what the ledger says:
+    /// "confirmed", "pending", "invalid", "unverified" or "no-wallet".
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Message {
     pub id: String,
@@ -84,6 +97,8 @@ pub struct Message {
     pub file: Option<FileInfo>,
     /// The code of an animated sticker.
     pub sticker: Option<String>,
+    /// A Nano payment.
+    pub payment: Option<PaymentInfo>,
     /// A note from the app itself, such as a key change.
     pub system: bool,
     /// One reaction per person: identifier → reaction code.
@@ -105,6 +120,7 @@ impl Message {
             status: Status::Queued,
             file: None,
             sticker: None,
+            payment: None,
             system: false,
             reactions: BTreeMap::new(),
             recipients: 1,
@@ -241,7 +257,7 @@ impl Store {
                 key: key.clone(),
                 messages: messages
                     .iter()
-                    .map(|message| archived(message, me))
+                    .map(|message| archived(message, me, key))
                     .collect(),
             })
             .collect()
@@ -250,12 +266,13 @@ impl Store {
     /// Adds conversations from an archive, skipping messages already here.
     pub fn merge_archive(&mut self, conversations: Vec<ArchivedConversation>, me: &str) {
         for conversation in conversations {
-            let target = self.conversations.entry(conversation.key).or_default();
+            let key = conversation.key;
+            let target = self.conversations.entry(key.clone()).or_default();
             for message in conversation.messages {
                 if target.iter().any(|known| known.id == message.id) {
                     continue;
                 }
-                target.push(restored(message, me));
+                target.push(restored(message, me, &key));
             }
             target.sort_by_key(|message| message.at_ms);
         }
@@ -321,6 +338,22 @@ impl Store {
         Some(key)
     }
 
+    /// Updates the payment `id` in `peer`'s conversation. Returns `true` on
+    /// a change.
+    pub fn update_payment(&mut self, peer: &str, id: &str, status: &str) -> bool {
+        let Some(payment) = self
+            .find(peer, id)
+            .and_then(|message| message.payment.as_mut())
+        else {
+            return false;
+        };
+        if payment.status == status {
+            return false;
+        }
+        payment.status = status.to_owned();
+        true
+    }
+
     pub fn file(&self, peer: &str, id: &str) -> Option<FileInfo> {
         self.conversations
             .get(peer)?
@@ -337,8 +370,12 @@ impl Store {
     pub fn last_body(&self, peer: &str) -> Option<String> {
         let message = self.conversations.get(peer)?.last()?;
         let text = match &message.file {
-            _ if message.sticker.is_some() => "Naklejka".to_owned(),
-            Some(file) if file.media == Some("voice") => "🎤 Wiadomość głosowa".to_owned(),
+            _ if message.sticker.is_some() => crate::i18n::t("Naklejka"),
+            _ if message.payment.is_some() => {
+                let amount = message.payment.as_ref().map_or("", |p| p.amount.as_str());
+                format!("Ӿ {amount} XNO")
+            }
+            Some(file) if file.media == Some("voice") => crate::i18n::t("🎤 Wiadomość głosowa"),
             Some(file) if file.media == Some("gif") => "GIF".to_owned(),
             Some(file) => format!("📎 {}", file.name),
             None => message.body.clone(),
@@ -348,7 +385,7 @@ impl Store {
             preview.push('…');
         }
         Some(if message.mine {
-            format!("Ty: {preview}")
+            crate::i18n::tf("Ty: {preview}", &[("preview", &preview)])
         } else {
             preview
         })
@@ -376,30 +413,39 @@ impl Store {
     }
 }
 
-fn archived(message: &Message, me: &str) -> ArchivedMessage {
+/// `key` is the conversation: a contact's messages carry their identifier as
+/// the author, so they do not come back as ours.
+fn archived(message: &Message, me: &str, key: &str) -> ArchivedMessage {
     let file = message.file.as_ref();
     ArchivedMessage {
         id: message.id.clone(),
         author: if message.mine {
             String::new()
         } else {
-            message.author.clone().unwrap_or_default()
+            message.author.clone().unwrap_or_else(|| key.to_owned())
         },
         at_ms: message.at_ms,
         kind: if message.system {
             "system"
         } else if message.sticker.is_some() {
             "sticker"
+        } else if message.payment.is_some() {
+            "payment"
         } else if file.is_some() {
             "file"
         } else {
             "text"
         }
         .into(),
-        body: message
-            .sticker
-            .clone()
-            .unwrap_or_else(|| message.body.clone()),
+        body: match (&message.sticker, &message.payment) {
+            (Some(code), _) => code.clone(),
+            // Block, amount in raw and what the ledger said, for a restore.
+            (None, Some(payment)) => format!(
+                "{} {} {}",
+                payment.block, payment.amount_raw, payment.status
+            ),
+            (None, None) => message.body.clone(),
+        },
         file_name: file.map(|file| file.name.clone()),
         file_size: file.map_or(0, |file| file.size),
         file_hash: file.map(|file| file.hash.clone()),
@@ -433,7 +479,7 @@ fn archived(message: &Message, me: &str) -> ArchivedMessage {
     }
 }
 
-fn restored(message: ArchivedMessage, me: &str) -> Message {
+fn restored(message: ArchivedMessage, me: &str, key: &str) -> Message {
     let mine = message.author.is_empty() && message.kind != "system";
     let file = message.file_name.map(|name| {
         let (media, duration_ms) = match message.media {
@@ -465,8 +511,10 @@ fn restored(message: ArchivedMessage, me: &str) -> Message {
     Message {
         id: message.id,
         mine,
-        author: (!mine && !message.author.is_empty()).then_some(message.author),
-        body: if message.kind == "sticker" {
+        // In a contact's conversation the author is the contact.
+        author: (!mine && !message.author.is_empty() && message.author != key)
+            .then_some(message.author),
+        body: if message.kind == "sticker" || message.kind == "payment" {
             String::new()
         } else {
             message.body.clone()
@@ -478,6 +526,9 @@ fn restored(message: ArchivedMessage, me: &str) -> Message {
             _ => Status::Received,
         },
         file,
+        payment: (message.kind == "payment")
+            .then(|| restored_payment(&message.body))
+            .flatten(),
         sticker: (message.kind == "sticker").then_some(message.body),
         system: message.kind == "system",
         reactions: message
@@ -495,6 +546,19 @@ fn restored(message: ArchivedMessage, me: &str) -> Message {
         recipients: 1,
         delivered_by: Vec::new(),
     }
+}
+
+fn restored_payment(body: &str) -> Option<PaymentInfo> {
+    let mut parts = body.split(' ');
+    let block = parts.next()?.to_owned();
+    let amount_raw = parts.next()?.to_owned();
+    let status = parts.next().unwrap_or("unverified").to_owned();
+    Some(PaymentInfo {
+        amount: komunikator_ffi::format_nano_amount(amount_raw.clone()).ok()?,
+        block,
+        amount_raw,
+        status,
+    })
 }
 
 fn now_ms() -> u64 {
@@ -540,6 +604,35 @@ mod tests {
             back[0].reactions.get("ja").map(String::as_str),
             Some("kapec")
         );
+    }
+
+    #[test]
+    fn payments_keep_their_status_and_survive_an_archive() {
+        let mut store = Store::default();
+        let payment = Message {
+            payment: Some(PaymentInfo {
+                block: "AB".repeat(32),
+                amount: "1.5".into(),
+                amount_raw: "1500000000000000000000000000000".into(),
+                status: "checking".into(),
+            }),
+            ..Message::incoming("p1".into(), None, 5)
+        };
+        assert!(store.receive("ola", payment, false));
+        assert!(store.update_payment("ola", "p1", "confirmed"));
+        assert!(!store.update_payment("ola", "p1", "confirmed"));
+        assert!(!store.update_payment("ola", "nieznany", "confirmed"));
+        assert_eq!(store.last_body("ola").unwrap(), "Ӿ 1.5 XNO");
+
+        let mut fresh = Store::default();
+        fresh.merge_archive(store.to_archive("ja"), "ja");
+        let back = &fresh.conversation("ola")[0];
+        let payment = back.payment.as_ref().unwrap();
+        assert_eq!(
+            (payment.amount.as_str(), payment.status.as_str()),
+            ("1.5", "confirmed")
+        );
+        assert!(back.body.is_empty() && !back.mine);
     }
 
     #[test]

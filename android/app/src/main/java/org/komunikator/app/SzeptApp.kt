@@ -16,6 +16,8 @@ class SzeptApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Loads the chosen language before anything shows a text.
+        appearance.language
         // Switching between Wi-Fi and mobile data changes the phone's
         // addresses. Telling the core at once saves waiting for its next retry.
         val connectivity = getSystemService(ConnectivityManager::class.java)

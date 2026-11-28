@@ -272,13 +272,14 @@ async fn chat(
                         println!("[{}] (naklejka: {code})", name(contacts, &who));
                     }
                     // The terminal client shows one conversation, without
-                    // groups, pictures or reactions.
+                    // groups, pictures, reactions or payments.
                     Event::Avatar { .. }
                     | Event::Post { .. }
                     | Event::Reaction { .. }
                     | Event::Group { .. }
                     | Event::Left { .. }
-                    | Event::Name { .. } => {}
+                    | Event::Name { .. }
+                    | Event::Wallet { .. } => {}
                 }
             }
             _ = retry.tick() => {

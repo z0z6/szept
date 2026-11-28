@@ -64,7 +64,7 @@ class People(
     private val names: Map<String, String>,
     val pictures: Map<String, ImageBitmap>,
 ) {
-    fun name(id: String): String = if (id == myId) "Ty" else names[id] ?: "Ktoś spoza grupy"
+    fun name(id: String): String = if (id == myId) t("Ty") else names[id] ?: t("Ktoś spoza grupy")
 }
 
 /** Builds the names for a conversation: our aliases first, then names people chose, then the owner's list. */
@@ -139,7 +139,7 @@ fun MessageRow(
                         .combinedClickable(
                             onClick = {},
                             onLongClick = { palette = true },
-                            onLongClickLabel = "Zareaguj",
+                            onLongClickLabel = t("Zareaguj"),
                         ),
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -151,8 +151,10 @@ fun MessageRow(
                                 color = colors.primary,
                             )
                         }
+                        val payment = message.payment
                         when {
                             sticker != null -> StickerContent(sticker)
+                            payment != null -> PaymentContent(payment)
                             message.file != null -> fileContent()
                             else -> Text(message.body)
                         }
@@ -208,10 +210,10 @@ private fun Meta(message: Message, showWord: Boolean) {
 }
 
 private fun statusWord(status: Status) = when (status) {
-    Status.QUEUED -> "Czeka na kontakt"
-    Status.SENT -> "Wysłano"
-    Status.DELIVERED -> "Dostarczono"
-    Status.RECEIVED -> "Odebrano"
+    Status.QUEUED -> t("Czeka na kontakt")
+    Status.SENT -> t("Wysłano")
+    Status.DELIVERED -> t("Dostarczono")
+    Status.RECEIVED -> t("Odebrano")
 }
 
 /** One chip per kind of reaction, with how many people chose it. */
@@ -234,8 +236,8 @@ private fun Reactions(message: Message, people: People, onToggle: (String) -> Un
                 color = if (own) colors.primaryContainer else colors.surfaceContainerHighest,
                 border = BorderStroke(1.dp, if (own) colors.primary else colors.outlineVariant),
                 modifier = Modifier
-                    .clickable(onClickLabel = if (own) "Cofnij reakcję" else "Dołącz") { onToggle(code) }
-                    .semantics { contentDescription = "${FIGURES[code]?.name}: $names" },
+                    .clickable(onClickLabel = if (own) t("Cofnij reakcję") else t("Dołącz")) { onToggle(code) }
+                    .semantics { contentDescription = "${FIGURES[code]?.name?.let { t(it) }}: $names" },
             ) {
                 Row(
                     modifier = Modifier.padding(start = 3.dp, end = 8.dp, top = 1.dp, bottom = 1.dp),
@@ -255,7 +257,8 @@ private fun ReactionPalette(current: String?, onPick: (String) -> Unit, onDismis
     val colors = MaterialTheme.colorScheme
     Popup(
         alignment = Alignment.TopCenter,
-        offset = androidx.compose.ui.unit.IntOffset(0, -170),
+        // Three rows of Szeptusie above the message.
+        offset = androidx.compose.ui.unit.IntOffset(0, -230),
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
     ) {
@@ -275,9 +278,9 @@ private fun ReactionPalette(current: String?, onPick: (String) -> Unit, onDismis
                                 color = if (code == current) colors.primaryContainer else colors.surfaceContainerHighest,
                                 modifier = Modifier
                                     .padding(2.dp)
-                                    .clickable(onClickLabel = figure.name) { onPick(code) },
+                                    .clickable(onClickLabel = t(figure.name)) { onPick(code) },
                             ) {
-                                Box(Modifier.padding(4.dp)) { FigureView(code, 40.dp, label = figure.name) }
+                                Box(Modifier.padding(4.dp)) { FigureView(code, 40.dp, label = t(figure.name)) }
                             }
                         }
                     }
@@ -291,9 +294,9 @@ private fun ReactionPalette(current: String?, onPick: (String) -> Unit, onDismis
 private fun StickerContent(code: String) {
     val figure = FIGURES[code]
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FigureView(code, 128.dp, label = figure?.caption?.let { "Naklejka: $it" })
+        FigureView(code, 128.dp, label = figure?.caption?.let { t("Naklejka: {caption}", "caption" to t(it)) })
         Text(
-            figure?.caption.orEmpty(),
+            figure?.caption?.let { t(it) }.orEmpty(),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -308,7 +311,7 @@ private fun StickerContent(code: String) {
 fun StickerPanel(onPick: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
         Text(
-            "Szeptusie: wyślij naklejkę",
+            t("Szeptusie: wyślij naklejkę"),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(4.dp),
@@ -323,12 +326,12 @@ fun StickerPanel(onPick: (String) -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .padding(4.dp)
-                        .clickable(onClickLabel = "Wyślij naklejkę: ${figure.caption}") { onPick(code) }
+                        .clickable(onClickLabel = t("Wyślij naklejkę: {caption}", "caption" to t(figure.caption))) { onPick(code) }
                         .padding(4.dp),
                 ) {
                     FigureView(code, 64.dp)
                     Text(
-                        figure.caption,
+                        t(figure.caption),
                         style = MaterialTheme.typography.labelSmall,
                         textAlign = TextAlign.Center,
                         maxLines = 2,
@@ -364,12 +367,12 @@ fun GroupDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(64) },
-                    label = { Text("Nazwa grupy") },
+                    label = { Text(t("Nazwa grupy")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.size(8.dp))
-                Text("Członkowie", style = MaterialTheme.typography.titleSmall)
+                Text(t("Członkowie"), style = MaterialTheme.typography.titleSmall)
                 rows.forEach { (id, label) ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -388,13 +391,13 @@ fun GroupDialog(
         confirmButton = {
             TextButton(onClick = {
                 when {
-                    name.isBlank() -> error = "Nadaj grupie nazwę."
-                    chosen.isEmpty() -> error = "Zaznacz co najmniej jedną osobę."
+                    name.isBlank() -> error = t("Nadaj grupie nazwę.")
+                    chosen.isEmpty() -> error = t("Zaznacz co najmniej jedną osobę.")
                     else -> onConfirm(name.trim(), chosen.toList())
                 }
             }) { Text(confirm) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(t("Anuluj")) } },
     )
 }
 
@@ -413,12 +416,12 @@ fun GroupInfoDialog(
     var leaving by remember { mutableStateOf(false) }
     if (editing) {
         GroupDialog(
-            title = "Zmień grupę",
+            title = t("Zmień grupę"),
             contacts = contacts,
             initialName = group.name,
             others = group.members.filter { it.id != people.myId }.map { it.id to people.name(it.id) },
             initialMembers = group.members.map { it.id }.filter { it != people.myId }.toSet(),
-            confirm = "Zapisz",
+            confirm = t("Zapisz"),
             onDismiss = { editing = false },
             onConfirm = { name, members ->
                 editing = false
@@ -430,13 +433,13 @@ fun GroupInfoDialog(
     if (leaving) {
         AlertDialog(
             onDismissRequest = { leaving = false },
-            title = { Text(if (group.mine) "Zamknąć grupę?" else "Opuścić grupę?") },
+            title = { Text(if (group.mine) t("Zamknąć grupę?") else t("Opuścić grupę?")) },
             text = {
                 Text(
                     if (group.mine) {
-                        "Grupa zniknie u wszystkich członków."
+                        t("Grupa zniknie u wszystkich członków.")
                     } else {
-                        "Rozmowa zniknie z tego telefonu."
+                        t("Rozmowa zniknie z tego telefonu.")
                     },
                 )
             },
@@ -444,9 +447,9 @@ fun GroupInfoDialog(
                 TextButton(onClick = {
                     leaving = false
                     onLeave()
-                }) { Text(if (group.mine) "Zamknij" else "Opuść") }
+                }) { Text(if (group.mine) t("Zamknij") else t("Opuść")) }
             },
-            dismissButton = { TextButton(onClick = { leaving = false }) { Text("Anuluj") } },
+            dismissButton = { TextButton(onClick = { leaving = false }) { Text(t("Anuluj")) } },
         )
         return
     }
@@ -463,13 +466,13 @@ fun GroupInfoDialog(
                         Avatar(people.name(member.id), member.id in online, people.pictures[member.id], size = 32)
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            people.name(member.id) + if (member.id == group.owner) " · właściciel" else "",
+                            people.name(member.id) + if (member.id == group.owner) t(" · właściciel") else "",
                         )
                     }
                 }
                 if (!group.mine) {
                     Text(
-                        "Członków zmienia właściciel grupy.",
+                        t("Członków zmienia właściciel grupy."),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -479,10 +482,10 @@ fun GroupInfoDialog(
         confirmButton = {
             Row {
                 TextButton(onClick = { leaving = true }) {
-                    Text(if (group.mine) "Zamknij grupę" else "Opuść", color = MaterialTheme.colorScheme.error)
+                    Text(if (group.mine) t("Zamknij grupę") else t("Opuść"), color = MaterialTheme.colorScheme.error)
                 }
-                if (group.mine) TextButton(onClick = { editing = true }) { Text("Zmień") }
-                TextButton(onClick = onDismiss) { Text("Gotowe") }
+                if (group.mine) TextButton(onClick = { editing = true }) { Text(t("Zmień")) }
+                TextButton(onClick = onDismiss) { Text(t("Gotowe")) }
             }
         },
     )
@@ -500,18 +503,16 @@ fun KeyUpdateDialog(
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nowy klucz: ${contact.alias}") },
+        title = { Text(t("Nowy klucz: {alias}", "alias" to contact.alias)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "Użyj tego, gdy ta osoba zainstalowała Szept od nowa i ma nowy identyfikator. " +
-                        "Stara rozmowa zostanie zakończona, a nowa będzie toczyć się pod nią.",
+                    t("Użyj tego, gdy ta osoba zainstalowała Szept od nowa i ma nowy identyfikator. Stara rozmowa zostanie zakończona, a nowa będzie toczyć się pod nią."),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.size(8.dp))
                 Text(
-                    "Sprawdź nowy identyfikator osobiście albo przez inny kanał: ktoś obcy też może " +
-                        "podesłać swój, podszywając się pod Twój kontakt.",
+                    t("Sprawdź nowy identyfikator osobiście albo przez inny kanał: ktoś obcy też może podesłać swój, podszywając się pod Twój kontakt."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -519,7 +520,7 @@ fun KeyUpdateDialog(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("Nowy identyfikator") },
+                    label = { Text(t("Nowy identyfikator")) },
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -530,13 +531,13 @@ fun KeyUpdateDialog(
             TextButton(onClick = {
                 val id = parseId(text)
                 when {
-                    id == null -> error = "To nie jest identyfikator Szeptu."
-                    id == contact.id -> error = "Ten kontakt ma już ten klucz."
+                    id == null -> error = t("To nie jest identyfikator Szeptu.")
+                    id == contact.id -> error = t("Ten kontakt ma już ten klucz.")
                     else -> onConfirm(id)
                 }
-            }) { Text("Zaktualizuj klucz") }
+            }) { Text(t("Zaktualizuj klucz")) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(t("Anuluj")) } },
     )
 }
 
@@ -561,22 +562,21 @@ fun ArchiveDialog(
     val hide = if (visible) VisualTransformation.None else PasswordVisualTransformation()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (exporting) "Zapisz archiwum" else "Wczytaj archiwum") },
+        title = { Text(if (exporting) t("Zapisz archiwum") else t("Wczytaj archiwum")) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     if (exporting) {
-                        "Archiwum jest szyfrowane tym hasłem (Argon2id, 128 MiB, XChaCha20-Poly1305). " +
-                            "Bez hasła nie da się go odczytać, więc go nie zgub. Najlepsze jest długie hasło z kilku słów."
+                        t("Archiwum jest szyfrowane tym hasłem (Argon2id, 128 MiB, XChaCha20-Poly1305). Bez hasła nie da się go odczytać, więc go nie zgub. Najlepsze jest długie hasło z kilku słów.")
                     } else {
-                        "Kontakty, grupy, rozmowy i ustawienia z archiwum dołączą do tych, które już tu są."
+                        t("Kontakty, grupy, rozmowy i ustawienia z archiwum dołączą do tych, które już tu są.")
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Hasło archiwum") },
+                    label = { Text(t("Hasło archiwum")) },
                     singleLine = true,
                     visualTransformation = hide,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -586,7 +586,7 @@ fun ArchiveDialog(
                     OutlinedTextField(
                         value = repeat,
                         onValueChange = { repeat = it },
-                        label = { Text("Powtórz hasło") },
+                        label = { Text(t("Powtórz hasło")) },
                         singleLine = true,
                         visualTransformation = hide,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -604,7 +604,7 @@ fun ArchiveDialog(
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         )
                         Text(
-                            "Hasło: ${STRENGTH_WORDS[score]}" + if (rated.acceptable) "" else " – za słabe na archiwum",
+                            t("Hasło: {score}", "score" to STRENGTH_WORDS[score]) + if (rated.acceptable) "" else t(" – za słabe na archiwum"),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -615,12 +615,12 @@ fun ArchiveDialog(
                             repeat = phrase
                             visible = true
                             suggested = true
-                        }) { Text("Wymyśl mocne hasło") }
-                        TextButton(onClick = { visible = !visible }) { Text(if (visible) "Ukryj" else "Pokaż") }
+                        }) { Text(t("Wymyśl mocne hasło")) }
+                        TextButton(onClick = { visible = !visible }) { Text(if (visible) t("Ukryj") else t("Pokaż")) }
                     }
                     if (suggested) {
                         Text(
-                            "Zapisz to hasło na kartce albo w menedżerze haseł. Bez niego archiwum przepadnie.",
+                            t("Zapisz to hasło na kartce albo w menedżerze haseł. Bez niego archiwum przepadnie."),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -636,17 +636,16 @@ fun ArchiveDialog(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         if (exporting) {
-                            "Dołącz mój klucz tożsamości: po wczytaniu zostanie ten sam identyfikator"
+                            t("Dołącz mój klucz tożsamości: po wczytaniu zostanie ten sam identyfikator")
                         } else {
-                            "Przywróć identyfikator z archiwum (obecny zostanie zastąpiony)"
+                            t("Przywróć identyfikator z archiwum (obecny zostanie zastąpiony)")
                         },
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
                 if (exporting && identity) {
                     Text(
-                        "Z kluczem tożsamości ktoś, kto zdobędzie plik i hasło, może podszywać się pod Ciebie. " +
-                            "Trzymaj archiwum w bezpiecznym miejscu, a hasło osobno.",
+                        t("Z kluczem tożsamości ktoś, kto zdobędzie plik i hasło, może podszywać się pod Ciebie. Trzymaj archiwum w bezpiecznym miejscu, a hasło osobno."),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -658,19 +657,19 @@ fun ArchiveDialog(
             TextButton(onClick = {
                 when {
                     password.codePointCount(0, password.length) < MIN_ARCHIVE_PASSWORD ->
-                        error = "Hasło musi mieć co najmniej $MIN_ARCHIVE_PASSWORD znaków."
+                        error = t("Hasło musi mieć co najmniej {count} znaków.", "count" to MIN_ARCHIVE_PASSWORD)
                     exporting && strength?.acceptable != true ->
-                        error = "To hasło łatwo odgadnąć. Dodaj kilka słów albo użyj przycisku Wymyśl mocne hasło."
-                    exporting && password != repeat -> error = "Hasła się różnią."
+                        error = t("To hasło łatwo odgadnąć. Dodaj kilka słów albo użyj przycisku Wymyśl mocne hasło.")
+                    exporting && password != repeat -> error = t("Hasła się różnią.")
                     else -> onConfirm(password, identity)
                 }
-            }) { Text("Wybierz plik") }
+            }) { Text(t("Wybierz plik")) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(t("Anuluj")) } },
     )
 }
 
-private val STRENGTH_WORDS = listOf("bardzo słabe", "słabe", "średnie", "dobre", "bardzo dobre")
+private val STRENGTH_WORDS = listOf(t("bardzo słabe"), t("słabe"), t("średnie"), t("dobre"), t("bardzo dobre"))
 
 /** Matches the core's minimum, see `min_password_len`. */
 private const val MIN_ARCHIVE_PASSWORD = 12

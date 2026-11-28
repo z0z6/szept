@@ -35,7 +35,7 @@ function renderContacts(contacts) {
   list.replaceChildren(
     ...contacts.map((contact) => {
       const status = contact.online ? "online" : "offline";
-      const preview = contact.last || (contact.online ? "Połączony" : "Niepołączony");
+      const preview = contact.last || (contact.online ? t("Połączony") : t("Niepołączony"));
       const label = `${contact.alias}, ${status}` +
         (contact.unread ? `, nieprzeczytane: ${contact.unread}` : "");
       return el(
@@ -46,7 +46,7 @@ function renderContacts(contacts) {
           {
             class: "contact-open",
             type: "button",
-            "aria-label": `Otwórz rozmowę: ${label}`,
+            "aria-label": t("Otwórz rozmowę: {label}", { label }),
             onclick: () => invoke("open_chat", { peer: contact.id }).catch(showStatus),
           },
           (() => {
@@ -65,16 +65,16 @@ function renderContacts(contacts) {
         el("button", {
           class: "icon-button remove",
           type: "button",
-          title: "Nowy klucz kontaktu (po ponownej instalacji)",
-          "aria-label": `Zaktualizuj klucz kontaktu ${contact.alias}`,
+          title: t("Nowy klucz kontaktu (po ponownej instalacji)"),
+          "aria-label": t("Zaktualizuj klucz kontaktu {alias}", { alias: contact.alias }),
           text: "🔑",
           onclick: () => askKey(contact.alias),
         }),
         el("button", {
           class: "icon-button remove",
           type: "button",
-          title: "Usuń kontakt",
-          "aria-label": `Usuń kontakt ${contact.alias}`,
+          title: t("Usuń kontakt"),
+          "aria-label": t("Usuń kontakt {alias}", { alias: contact.alias }),
           text: "✕",
           onclick: () => askRemove(contact.alias),
         }),
@@ -87,8 +87,8 @@ function renderContacts(contacts) {
 function renderGroups(groups) {
   $("groups").replaceChildren(
     ...groups.map((group) => {
-      const preview = group.last || `${group.members} osób`;
-      const label = `Grupa ${group.name}` + (group.unread ? `, nieprzeczytane: ${group.unread}` : "");
+      const preview = group.last || t("{members} osób", { members: group.members });
+      const label = t("Grupa {name}", { name: group.name }) + (group.unread ? `, nieprzeczytane: ${group.unread}` : "");
       return el(
         "li",
         { class: "contact" },
@@ -97,7 +97,7 @@ function renderGroups(groups) {
           {
             class: "contact-open",
             type: "button",
-            "aria-label": `Otwórz rozmowę: ${label}`,
+            "aria-label": t("Otwórz rozmowę: {label}", { label }),
             onclick: () => invoke("open_chat", { peer: group.id }).catch(showStatus),
           },
           el("span", { class: "avatar group-avatar", text: [...group.name][0] || "#" }),
@@ -135,8 +135,8 @@ $("qr-small").addEventListener("click", () => $("qr-dialog").showModal());
 $("copy-id").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(myId);
-    $("copy-id").textContent = "Skopiowano";
-    setTimeout(() => ($("copy-id").textContent = "Kopiuj identyfikator"), 1500);
+    $("copy-id").textContent = t("Skopiowano");
+    setTimeout(() => ($("copy-id").textContent = t("Kopiuj identyfikator")), 1500);
   } catch {
     $("qr-dialog").showModal();
   }
@@ -158,6 +158,7 @@ $("settings-open").addEventListener("click", () => {
   for (const radio of document.querySelectorAll('input[name="text-size"]')) {
     radio.checked = radio.value === currentTextSize();
   }
+  renderSoundChoices();
   settingsDialog.showModal();
 });
 
@@ -234,7 +235,7 @@ $("avatar-file").addEventListener("change", async (event) => {
   try {
     bytes = await pictureForAvatar(file);
   } catch {
-    setAvatarError("Nie udało się otworzyć tego zdjęcia.");
+    setAvatarError(t("Nie udało się otworzyć tego zdjęcia."));
     return;
   }
   try {
@@ -266,7 +267,7 @@ $("prefs-save").addEventListener("click", async () => {
     2,
   );
   try {
-    if (await invoke("save_settings_file", { json })) showStatus("Ustawienia zapisane do pliku.");
+    if (await invoke("save_settings_file", { json })) showStatus(t("Ustawienia zapisane do pliku."));
   } catch (err) {
     showStatus(err);
   }
@@ -283,12 +284,12 @@ $("prefs-load").addEventListener("click", async () => {
       data = null;
     }
     if (data?.szept !== "ustawienia" || typeof data.preferences !== "object") {
-      showStatus("To nie jest plik ustawień Szeptu.");
+      showStatus(t("To nie jest plik ustawień Szeptu."));
       return;
     }
     const applied = applyPreferences(data.preferences);
     refreshPreferenceControls();
-    showStatus(applied ? "Ustawienia wczytane." : "W pliku nie było ustawień, które ta wersja zna.");
+    showStatus(applied ? t("Ustawienia wczytane.") : t("W pliku nie było ustawień, które ta wersja zna."));
   } catch (err) {
     showStatus(err);
   }
@@ -312,7 +313,7 @@ $("name-form").addEventListener("submit", async (event) => {
   try {
     await invoke("set_name", { name: $("my-name").value });
     $("my-name").blur();
-    showStatus("Zapisano imię.");
+    showStatus(t("Zapisano imię."));
   } catch (err) {
     showStatus(err);
   }
@@ -332,10 +333,10 @@ function openArchive(mode) {
   $("archive-form").reset();
   setArchiveError("");
   $("archive-progress").hidden = true;
-  $("archive-dialog-title").textContent = exporting ? "Zapisz archiwum" : "Wczytaj archiwum";
+  $("archive-dialog-title").textContent = exporting ? t("Zapisz archiwum") : t("Wczytaj archiwum");
   $("archive-hint").textContent = exporting
-    ? "Archiwum jest szyfrowane tym hasłem (Argon2id, 128 MiB, XChaCha20-Poly1305). Bez hasła nie da się go odczytać, więc go nie zgub. Najlepsze jest długie hasło z kilku słów."
-    : "Kontakty, grupy i rozmowy z archiwum dołączą do tych, które już tu są.";
+    ? t("Archiwum jest szyfrowane tym hasłem (Argon2id, 128 MiB, XChaCha20-Poly1305). Bez hasła nie da się go odczytać, więc go nie zgub. Najlepsze jest długie hasło z kilku słów.")
+    : t("Kontakty, grupy i rozmowy z archiwum dołączą do tych, które już tu są.");
   $("archive-repeat-field").hidden = !exporting;
   $("archive-repeat").required = exporting;
   $("archive-identity").checked = true;
@@ -345,13 +346,13 @@ function openArchive(mode) {
   $("archive-suggestion").hidden = true;
   setPasswordVisible(false);
   $("archive-identity-label").textContent = exporting
-    ? "Dołącz mój klucz tożsamości (po wczytaniu zostanie ten sam identyfikator, kontakty nic nie muszą robić)"
-    : "Przywróć identyfikator z archiwum (obecny identyfikator zostanie zastąpiony)";
-  $("archive-confirm").textContent = exporting ? "Wybierz plik i zapisz" : "Wybierz plik i wczytaj";
+    ? t("Dołącz mój klucz tożsamości (po wczytaniu zostanie ten sam identyfikator, kontakty nic nie muszą robić)")
+    : t("Przywróć identyfikator z archiwum (obecny identyfikator zostanie zastąpiony)");
+  $("archive-confirm").textContent = exporting ? t("Wybierz plik i zapisz") : t("Wybierz plik i wczytaj");
   $("archive-dialog").showModal();
 }
 
-const STRENGTH_WORDS = ["bardzo słabe", "słabe", "średnie", "dobre", "bardzo dobre"];
+const STRENGTH_WORDS = [t("bardzo słabe"), t("słabe"), t("średnie"), t("dobre"), t("bardzo dobre")];
 let strengthTimer = 0;
 let lastStrength = null;
 
@@ -375,14 +376,14 @@ async function rateArchivePassword() {
   }
   $("archive-strength").hidden = false;
   $("archive-meter").value = lastStrength.score;
-  const enough = lastStrength.acceptable ? "" : " – za słabe na archiwum";
-  $("archive-strength-text").textContent = `Hasło: ${STRENGTH_WORDS[lastStrength.score]}${enough}`;
+  const enough = lastStrength.acceptable ? "" : t(" – za słabe na archiwum");
+  $("archive-strength-text").textContent = t("Hasło: {score}{enough}", { score: STRENGTH_WORDS[lastStrength.score], enough });
 }
 
 function setPasswordVisible(visible) {
   for (const id of ["archive-password", "archive-repeat"]) $(id).type = visible ? "text" : "password";
   $("archive-show").setAttribute("aria-pressed", String(visible));
-  $("archive-show").textContent = visible ? "Ukryj hasło" : "Pokaż hasło";
+  $("archive-show").textContent = visible ? t("Ukryj hasło") : t("Pokaż hasło");
 }
 
 $("archive-show").addEventListener("click", () =>
@@ -395,7 +396,7 @@ $("archive-suggest").addEventListener("click", async () => {
     $("archive-repeat").value = phrase;
     setPasswordVisible(true);
     $("archive-suggestion").textContent =
-      "Zapisz to hasło na kartce albo w menedżerze haseł. Bez niego archiwum przepadnie.";
+      t("Zapisz to hasło na kartce albo w menedżerze haseł. Bez niego archiwum przepadnie.");
     $("archive-suggestion").hidden = false;
     await rateArchivePassword();
   } catch (err) {
@@ -416,23 +417,23 @@ $("archive-form").addEventListener("submit", async (event) => {
   const identity = $("archive-identity").checked;
   setArchiveError("");
   if ([...password].length < 12) {
-    setArchiveError("Hasło musi mieć co najmniej 12 znaków.");
+    setArchiveError(t("Hasło musi mieć co najmniej 12 znaków."));
     return;
   }
   if (archiveMode === "export") {
     await rateArchivePassword();
     if (!lastStrength?.acceptable) {
-      setArchiveError("To hasło łatwo odgadnąć. Dodaj kilka słów albo użyj przycisku Wymyśl mocne hasło.");
+      setArchiveError(t("To hasło łatwo odgadnąć. Dodaj kilka słów albo użyj przycisku Wymyśl mocne hasło."));
       return;
     }
   }
   if (archiveMode === "export" && password !== $("archive-repeat").value) {
-    setArchiveError("Hasła się różnią.");
+    setArchiveError(t("Hasła się różnią."));
     return;
   }
   $("archive-confirm").disabled = true;
   $("archive-progress").hidden = false;
-  $("archive-progress").textContent = archiveMode === "export" ? "Zapisywanie…" : "Wczytywanie…";
+  $("archive-progress").textContent = archiveMode === "export" ? t("Zapisywanie…") : t("Wczytywanie…");
   try {
     if (archiveMode === "export") {
       const saved = await invoke("export_archive", {
@@ -442,7 +443,7 @@ $("archive-form").addEventListener("submit", async (event) => {
       });
       if (saved) {
         $("archive-dialog").close();
-        showStatus("Archiwum zapisane.");
+        showStatus(t("Archiwum zapisane."));
       }
     } else {
       const report = await invoke("import_archive_file", { password, restoreIdentity: identity });
@@ -452,13 +453,14 @@ $("archive-form").addEventListener("submit", async (event) => {
         refreshPreferenceControls();
         const parts = [
           `rozmowy: ${report.conversations}`,
-          `nowe kontakty: ${report.contacts_added}`,
-          `nowe grupy: ${report.groups_added}`,
+          t("nowe kontakty: {contactsAdded}", { contactsAdded: report.contacts_added }),
+          t("nowe grupy: {groupsAdded}", { groupsAdded: report.groups_added }),
         ];
-        if (report.identity_restored) parts.unshift("przywrócono identyfikator");
-        if (applied) parts.push("przywrócono ustawienia");
-        else if (identity && !report.had_identity) parts.push("archiwum nie zawierało klucza tożsamości");
-        showStatus(`Archiwum wczytane: ${parts.join(", ")}.`);
+        if (report.identity_restored) parts.unshift(t("przywrócono identyfikator"));
+        if (report.wallet_restored) parts.push(t("przywrócono portfel Nano"));
+        if (applied) parts.push(t("przywrócono ustawienia"));
+        else if (identity && !report.had_identity) parts.push(t("archiwum nie zawierało klucza tożsamości"));
+        showStatus(t("Archiwum wczytane: {parts}.", { parts: parts.join(", ") }));
       }
     }
   } catch (err) {
@@ -476,7 +478,7 @@ function askKey(alias) {
   rekeying = alias;
   $("key-form").reset();
   $("key-error").hidden = true;
-  $("key-title").textContent = `Nowy klucz: ${alias}`;
+  $("key-title").textContent = t("Nowy klucz: {alias}", { alias });
   $("key-dialog").showModal();
 }
 
@@ -485,7 +487,7 @@ $("key-form").addEventListener("submit", async (event) => {
   try {
     await invoke("update_contact_key", { alias: rekeying, id: $("key-id").value.trim() });
     $("key-dialog").close();
-    showStatus(`${rekeying} ma nowy klucz. Rozmowa toczy się dalej.`);
+    showStatus(t("{rekeying} ma nowy klucz. Rozmowa toczy się dalej.", { rekeying }));
   } catch (err) {
     $("key-error").textContent = friendly(err);
     $("key-error").hidden = false;
@@ -497,7 +499,7 @@ $("new-group").addEventListener("click", () => {
   $("group-form").reset();
   $("group-error").hidden = true;
   if (!lastContacts.length) {
-    showStatus("Najpierw dodaj kontakty, z którymi chcesz założyć grupę.");
+    showStatus(t("Najpierw dodaj kontakty, z którymi chcesz założyć grupę."));
     return;
   }
   $("group-members").replaceChildren(
@@ -517,7 +519,7 @@ $("group-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const members = [...$("group-members").querySelectorAll("input:checked")].map((input) => input.value);
   if (!members.length) {
-    $("group-error").textContent = "Zaznacz co najmniej jedną osobę.";
+    $("group-error").textContent = t("Zaznacz co najmniej jedną osobę.");
     $("group-error").hidden = false;
     return;
   }
@@ -537,6 +539,91 @@ $("sounds").addEventListener("change", (event) => {
   setSounds(event.target.checked);
   if (event.target.checked) sounds.incoming();
 });
+
+// Language: the system's, or the person's choice. Changing it reloads
+// every window.
+$("language").replaceChildren(
+  el("option", { value: "system", text: t("Jak w systemie") }),
+  ...I18N_LANGUAGES.map((language) => el("option", { value: language.code, text: language.name, lang: language.code })),
+);
+$("language").value = languageChoice();
+$("language").addEventListener("change", (event) => {
+  chooseLanguage(event.target.value).catch(showStatus);
+});
+// The Rust side shows some texts too: tell it what the windows use.
+invoke("set_language", { language: LANG }).catch(() => {});
+
+// Messages nobody is looking at: the core shows a notification and asks
+// this window, which is always there, for the sound.
+listen("chime", (event) => playSound(event.payload));
+
+// Notification sound and previews, in the settings.
+function renderSoundChoices() {
+  const current = chosenSound();
+  const choices = [...SOUND_CHOICES, { id: "none", name: t("Bez dźwięku"), about: t("tylko powiadomienie") }];
+  $("sound-choices").replaceChildren(
+    ...choices.map((choice) =>
+      el(
+        "div",
+        { class: "sound-choice" },
+        el(
+          "label",
+          {},
+          el("input", {
+            type: "radio",
+            name: "sound",
+            value: choice.id,
+            checked: choice.id === current,
+            onchange: () => chooseSound(choice.id),
+          }),
+          el("span", { class: "sound-name", text: choice.name }),
+          el("span", { class: "sound-about", text: choice.about }),
+        ),
+        choice.id === "none"
+          ? el("span")
+          : el("button", {
+            class: "icon-button sound-play",
+            type: "button",
+            title: t("Posłuchaj: {name}", { name: choice.name }),
+            "aria-label": t("Posłuchaj: {name}", { name: choice.name }),
+            text: "▶",
+            onclick: () => playSound(choice.id, 0.7, true),
+          }),
+      ),
+    ),
+  );
+  $("notify-preview").checked = previewsOn();
+}
+
+async function chooseSound(id) {
+  try {
+    await setNotifySettings(id, $("notify-preview").checked);
+    playSound(id, 0.7, true);
+  } catch (err) {
+    showStatus(err);
+  }
+}
+
+$("notify-preview").addEventListener("change", async (event) => {
+  try {
+    await setNotifySettings(chosenSound(), event.target.checked);
+  } catch (err) {
+    showStatus(err);
+  }
+});
+
+// The core's copy wins at start: it is what notifications use.
+invoke("notify_settings")
+  .then((settings) => {
+    try {
+      localStorage.setItem(SOUND_KEY, settings.sound);
+      localStorage.setItem(PREVIEW_KEY, settings.preview ? "on" : "off");
+    } catch {
+      // Nothing to remember it in; the core still has it.
+    }
+    renderSoundChoices();
+  })
+  .catch(() => renderSoundChoices());
 
 // Adding a contact
 const addDialog = $("add-dialog");
@@ -558,7 +645,7 @@ $("add-form").addEventListener("submit", async (event) => {
   try {
     await invoke("add_contact", { alias, id });
     addDialog.close();
-    $("status").textContent = `Dodano: ${alias}. Ta osoba też musi dodać Ciebie.`;
+    $("status").textContent = t("Dodano: {alias}. Ta osoba też musi dodać Ciebie.", { alias });
   } catch (err) {
     setAddError(friendly(err));
   }
@@ -588,7 +675,7 @@ $("scan").addEventListener("click", async () => {
   }
   setAddError("");
   if (!navigator.mediaDevices?.getUserMedia) {
-    setScanStatus("Kamera nie jest tu dostępna. Wczytaj zrzut ekranu z kodem albo wklej identyfikator.");
+    setScanStatus(t("Kamera nie jest tu dostępna. Wczytaj zrzut ekranu z kodem albo wklej identyfikator."));
     return;
   }
   try {
@@ -600,15 +687,15 @@ $("scan").addEventListener("click", async () => {
     stream = null;
     const missing = err?.name === "NotFoundError" || err?.name === "OverconstrainedError";
     setScanStatus(missing
-      ? "Nie znaleziono kamery. Wczytaj zrzut ekranu z kodem albo wklej identyfikator."
-      : "Brak dostępu do kamery. Zezwól na nią w ustawieniach systemu albo wczytaj obraz z kodem.");
+      ? t("Nie znaleziono kamery. Wczytaj zrzut ekranu z kodem albo wklej identyfikator.")
+      : t("Brak dostępu do kamery. Zezwól na nią w ustawieniach systemu albo wczytaj obraz z kodem."));
     return;
   }
   const video = $("video");
   video.srcObject = stream;
   $("scanner").hidden = false;
-  $("scan").textContent = "Zatrzymaj kamerę";
-  setScanStatus("Skieruj kamerę na kod QR drugiej osoby.");
+  $("scan").textContent = t("Zatrzymaj kamerę");
+  setScanStatus(t("Skieruj kamerę na kod QR drugiej osoby."));
   await video.play().catch(() => {});
   scanTimer = setInterval(() => scanFrame(video), 200);
 });
@@ -636,12 +723,12 @@ async function accept(text) {
     const id = await invoke("normalize_id", { text });
     stopCamera();
     $("new-id").value = id;
-    setScanStatus("Kod odczytany. Nadaj kontaktowi nazwę.");
+    setScanStatus(t("Kod odczytany. Nadaj kontaktowi nazwę."));
     $("new-alias").focus();
   } catch {
     if (text !== lastRejected) {
       lastRejected = text;
-      setScanStatus("To nie jest kod Szeptu. Zeskanuj kod z aplikacji drugiej osoby.");
+      setScanStatus(t("To nie jest kod Szeptu. Zeskanuj kod z aplikacji drugiej osoby."));
     }
   }
 }
@@ -655,7 +742,7 @@ function stopCamera() {
   stream = null;
   $("video").srcObject = null;
   $("scanner").hidden = true;
-  $("scan").textContent = "Skanuj kamerą";
+  $("scan").textContent = t("Skanuj kamerą");
 }
 
 // Reading a code from a picture: a screenshot, a photo, a saved image.
@@ -675,10 +762,10 @@ $("scan-file").addEventListener("change", async (event) => {
       lastRejected = "";
       await accept(found);
     } else {
-      setScanStatus("Na tym obrazie nie ma czytelnego kodu QR.");
+      setScanStatus(t("Na tym obrazie nie ma czytelnego kodu QR."));
     }
   } catch {
-    setScanStatus("Nie udało się otworzyć tego obrazu.");
+    setScanStatus(t("Nie udało się otworzyć tego obrazu."));
   }
 });
 
@@ -687,7 +774,7 @@ let removing = null;
 
 function askRemove(alias) {
   removing = alias;
-  $("remove-title").textContent = `Usunąć kontakt ${alias}?`;
+  $("remove-title").textContent = t("Usunąć kontakt {alias}?", { alias });
   $("remove-dialog").showModal();
 }
 

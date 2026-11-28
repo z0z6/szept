@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -28,7 +29,9 @@ import uniffi.komunikator_ffi.Contact
 import uniffi.komunikator_ffi.EventListener
 import uniffi.komunikator_ffi.Group
 import uniffi.komunikator_ffi.Media
+import uniffi.komunikator_ffi.WalletStatus
 import uniffi.komunikator_ffi.fileKind
+import uniffi.komunikator_ffi.formatNanoAmount
 import uniffi.komunikator_ffi.maxAvatarLen
 import uniffi.komunikator_ffi.maxMediaSize
 import uniffi.komunikator_ffi.normalizeId
@@ -80,7 +83,21 @@ data class FileItem(
     val durationMs: Long = 0,
 )
 
-/** One line of a conversation: text, a file, a sticker or a note from the app. */
+/** A Nano payment told about in a conversation. */
+data class PaymentItem(
+    /** The hash of the send block, in hex. */
+    val block: String,
+    /** In XNO, such as "1.5". */
+    val amount: String,
+    val amountRaw: String,
+    /**
+     * Ours: "sent". Theirs: "checking", then what the ledger says:
+     * "confirmed", "pending", "invalid", "unverified" or "no-wallet".
+     */
+    val status: String,
+)
+
+/** One line of a conversation: text, a file, a sticker, a payment or a note from the app. */
 data class Message(
     val id: String,
     val mine: Boolean,
@@ -99,6 +116,8 @@ data class Message(
     /** For our group messages: how many must confirm, and who did. */
     val recipients: Int = 1,
     val deliveredBy: Set<String> = emptySet(),
+    /** A Nano payment. */
+    val payment: PaymentItem? = null,
 )
 
 data class UiState(
@@ -128,7 +147,20 @@ data class UiState(
     val info: String? = null,
     /** An archive is being written or read. */
     val busy: Boolean = false,
+    /** Our Nano wallet, off until the person turns it on. */
+    val wallet: WalletStatus? = null,
+    /** The balance in XNO, null while unknown. */
+    val walletBalance: String? = null,
+    /** Sent to us, not received yet, in XNO. */
+    val walletReceivable: String? = null,
+    /** Contacts' Nano addresses, by identifier. */
+    val contactWallets: Map<String, String> = emptyMap(),
+    /** A payment is on its way: its proof-of-work can take up to a minute. */
+    val paying: Boolean = false,
 )
+
+/** The longest message preview in a notification, in characters. */
+private const val PREVIEW_CHARS = 90
 
 /** Group identifiers have 32 hex digits, people's 64. */
 fun isGroup(key: String): Boolean = key.length == 32
@@ -148,6 +180,18 @@ class Messenger(private val application: Application) : EventListener {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val notifier = Notifier(application)
+    private val sounds = Sounds(application)
+
+    /** The person's choices: sounds and notification previews among them. */
+    private val appearance: Appearance get() = (application as SzeptApp).appearance
+
+    /** Plays one of Szept's sounds, unless the person turned them off. */
+    private fun chime(id: String) {
+        if (appearance.sounds) sounds.play(id)
+    }
+
+    /** Lets the person hear a sound in the settings, whatever the switch says. */
+    fun previewSound(id: String) = sounds.play(id)
 
     /** Orders "sent" and "delivered" after the message they are about. */
     private val sendLock = Any()
@@ -199,6 +243,7 @@ class Messenger(private val application: Application) : EventListener {
             .toSet() - app.myId()
         val avatars = everyone.mapNotNull { id -> app.avatar(id)?.let(::decodePicture)?.let { id to it } }.toMap()
         val names = everyone.mapNotNull { id -> app.displayName(id)?.let { id to it } }.toMap()
+        val wallets = contacts.mapNotNull { contact -> app.contactWallet(contact.id)?.let { contact.id to it } }.toMap()
         _state.update {
             it.copy(
                 contacts = contacts,
@@ -207,8 +252,11 @@ class Messenger(private val application: Application) : EventListener {
                 names = names,
                 myName = app.myName(),
                 myAvatar = app.myAvatar()?.let(::decodePicture),
+                wallet = app.walletStatus(),
+                contactWallets = wallets,
             )
         }
+        refreshBalance()
     }
 
     /**
@@ -296,9 +344,9 @@ class Messenger(private val application: Application) : EventListener {
             is ChatEvent.GroupChanged -> core?.let(::reloadPeople)
             is ChatEvent.GroupClosed -> {
                 val text = if (event.reason == "removed") {
-                    "Właściciel usunął Cię z tej grupy."
+                    t("Właściciel usunął Cię z tej grupy.")
                 } else {
-                    "Właściciel zamknął tę grupę."
+                    t("Właściciel zamknął tę grupę.")
                 }
                 note(event.group, text)
                 core?.let(::reloadPeople)
@@ -316,6 +364,36 @@ class Messenger(private val application: Application) : EventListener {
             is ChatEvent.Sent -> synchronized(sendLock) {
                 setStatus(event.group ?: event.peer, event.id, Status.SENT)
             }
+            is ChatEvent.ContactWalletChanged -> {
+                val address = core?.contactWallet(event.peer)
+                _state.update {
+                    it.copy(
+                        contactWallets = if (address != null) {
+                            it.contactWallets + (event.peer to address)
+                        } else {
+                            it.contactWallets - event.peer
+                        },
+                    )
+                }
+            }
+            is ChatEvent.Payment -> receive(
+                event.peer,
+                Message(
+                    event.id,
+                    false,
+                    "",
+                    event.sentAtMs.toLong(),
+                    Status.RECEIVED,
+                    payment = PaymentItem(event.block, event.amount, event.amountRaw, "checking"),
+                ),
+            )
+            is ChatEvent.PaymentChecked -> updatePayment(event.peer, event.id, event.status)
+            is ChatEvent.NanoReceived -> {
+                // A contact's payment already rang in their conversation.
+                if (event.payment.peer == null && foreground) chime("kaching")
+                refreshBalance()
+            }
+            is ChatEvent.WalletChanged -> refreshBalance()
             is ChatEvent.Delivered -> synchronized(sendLock) {
                 val group = event.group
                 if (group == null) {
@@ -367,6 +445,7 @@ class Messenger(private val application: Application) : EventListener {
                 Message(id, true, body, System.currentTimeMillis(), Status.QUEUED, recipients = recipients(peer)),
             )
         }
+        chime("fiu")
     }
 
     /** Sends an animated sticker to a contact or a group. */
@@ -381,6 +460,7 @@ class Messenger(private val application: Application) : EventListener {
                 ),
             )
         }
+        chime("fiu")
     }
 
     /** Reacts to a message, or takes our reaction back with an empty `reaction`. */
@@ -391,7 +471,7 @@ class Messenger(private val application: Application) : EventListener {
 
     fun setName(name: String) = withCore { app ->
         app.setName(name)
-        _state.update { it.copy(myName = app.myName(), info = "Zapisano imię.") }
+        _state.update { it.copy(myName = app.myName(), info = t("Zapisano imię.")) }
     }
 
     fun createGroup(name: String, members: List<String>) = withCore { app ->
@@ -426,7 +506,7 @@ class Messenger(private val application: Application) : EventListener {
     fun updateContactKey(contact: Contact, newId: String) = withCore { app ->
         val old = app.updateContactKey(contact.alias, newId)
         val new = app.contacts().first { it.alias == contact.alias }.id
-        val note = noteMessage("🔑 Kontakt ma nowy klucz. Wcześniejsza rozmowa zakończyła się tutaj, nowa toczy się poniżej.")
+        val note = noteMessage(t("🔑 Kontakt ma nowy klucz. Wcześniejsza rozmowa zakończyła się tutaj, nowa toczy się poniżej."))
         _state.update {
             val moved = it.messages[old].orEmpty() + note + it.messages[new].orEmpty()
             it.copy(
@@ -434,7 +514,7 @@ class Messenger(private val application: Application) : EventListener {
                 unread = it.unread - old,
                 online = it.online - old,
                 openId = if (it.openId == old) new else it.openId,
-                info = "${contact.alias} ma nowy klucz.",
+                info = t("{alias} ma nowy klucz.", "alias" to contact.alias),
             )
         }
         notifier.cancel(old)
@@ -456,13 +536,13 @@ class Messenger(private val application: Application) : EventListener {
         try {
             val me = app.myId()
             val conversations = _state.value.messages.map { (key, messages) ->
-                ArchivedConversation(key, messages.map { archived(it, me) })
+                ArchivedConversation(key, messages.map { archived(it, me, key) })
             }
             app.exportArchive(temp.absolutePath, password, includeIdentity, conversations, preferences)
             val output = application.contentResolver.openOutputStream(target, "wt")
-                ?: error("Nie można zapisać pliku.")
+                ?: error(t("Nie można zapisać pliku."))
             output.use { sink -> temp.inputStream().use { it.copyTo(sink) } }
-            _state.update { it.copy(info = "Archiwum zapisane.") }
+            _state.update { it.copy(info = t("Archiwum zapisane.")) }
         } finally {
             temp.delete()
             _state.update { it.copy(busy = false) }
@@ -485,7 +565,7 @@ class Messenger(private val application: Application) : EventListener {
             val temp = File(application.cacheDir, "archiwum-${System.nanoTime()}.szept")
             try {
                 val input = application.contentResolver.openInputStream(source)
-                    ?: error("Nie można otworzyć pliku.")
+                    ?: error(t("Nie można otworzyć pliku."))
                 input.use { from -> temp.outputStream().use { from.copyTo(it) } }
                 synchronized(lifecycle) {
                     core?.let { app ->
@@ -505,7 +585,7 @@ class Messenger(private val application: Application) : EventListener {
                     val prefsApplied = applyPreferences(result.preferences)
                     val me = _state.value.myId
                     val incoming = result.conversations.associate { conversation ->
-                        conversation.key to conversation.messages.map { restored(it, me) }
+                        conversation.key to conversation.messages.map { restored(it, me, conversation.key) }
                     }
                     _state.update { state ->
                         val merged = state.messages.toMutableMap()
@@ -515,14 +595,15 @@ class Messenger(private val application: Application) : EventListener {
                             merged[key] = (known + fresh).sortedBy { it.atMs }
                         }
                         val parts = buildList {
-                            if (result.identityRestored) add("przywrócono identyfikator")
+                            if (result.identityRestored) add(t("przywrócono identyfikator"))
+                            if (result.walletRestored) add(t("przywrócono portfel Nano"))
                             add("rozmowy: ${result.conversations.size}")
-                            add("nowe kontakty: ${result.contactsAdded}")
-                            add("nowe grupy: ${result.groupsAdded}")
-                            if (prefsApplied > 0) add("przywrócono ustawienia")
-                            if (restoreIdentity && !result.hadIdentity) add("archiwum nie miało klucza tożsamości")
+                            add(t("nowe kontakty: {contactsAdded}", "contactsAdded" to result.contactsAdded))
+                            add(t("nowe grupy: {groupsAdded}", "groupsAdded" to result.groupsAdded))
+                            if (prefsApplied > 0) add(t("przywrócono ustawienia"))
+                            if (restoreIdentity && !result.hadIdentity) add(t("archiwum nie miało klucza tożsamości"))
                         }
-                        state.copy(messages = merged, info = "Archiwum wczytane: ${parts.joinToString(", ")}.")
+                        state.copy(messages = merged, info = t("Archiwum wczytane: {parts}.", "parts" to parts.joinToString(", ")))
                     }
                 }
             } catch (e: Exception) {
@@ -535,6 +616,132 @@ class Messenger(private val application: Application) : EventListener {
     }
 
     fun clearInfo() = _state.update { it.copy(info = null) }
+
+    // The optional Nano wallet. Nothing here runs until the person turns it on.
+
+    /** Reads the balance from a Nano node; quietly unknown when none answers. */
+    fun refreshBalance() {
+        val app = core ?: return
+        scope.launch {
+            val balance = try {
+                if (app.walletStatus().enabled) app.walletBalance() else null
+            } catch (e: Exception) {
+                null
+            }
+            _state.update { it.copy(walletBalance = balance?.balance, walletReceivable = balance?.receivable) }
+        }
+    }
+
+    private fun reloadWallet(app: App) = _state.update { it.copy(wallet = app.walletStatus()) }
+
+    /** Turns the wallet on; the first time this creates the seed. */
+    fun walletCreate() = withCore { app ->
+        app.walletCreate()
+        reloadWallet(app)
+        refreshBalance()
+    }
+
+    /** Turns the wallet off. The seed and the money stay on this phone. */
+    fun walletDisable() = withCore { app ->
+        app.walletDisable()
+        reloadWallet(app)
+        _state.update { it.copy(walletBalance = null, walletReceivable = null) }
+    }
+
+    fun walletRestore(backup: String) = withCore { app ->
+        val status = app.walletRestore(backup)
+        reloadWallet(app)
+        refreshBalance()
+        _state.update { it.copy(info = t("Portfel przywrócony: {address}", "address" to status.address.orEmpty())) }
+    }
+
+    fun walletSetNodes(nodes: List<String>) = withCore { app ->
+        app.walletSetNodes(nodes)
+        reloadWallet(app)
+        refreshBalance()
+    }
+
+    fun walletReceive() = withCore { app ->
+        val received = app.walletReceive()
+        _state.update {
+            it.copy(info = if (received.isEmpty()) t("Nic nie czeka na odebranie.") else t("Odebrano przelewy: {count}.", "count" to received.size))
+        }
+        refreshBalance()
+    }
+
+    /** The 24 words. Quick: reads one small file. */
+    fun walletWords(): List<String> = try {
+        core?.walletWords().orEmpty()
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    fun walletQuiz(): List<UInt> = core?.walletBackupQuiz().orEmpty()
+
+    /** Checks the words given for `positions`; on a match the backup counts as done. */
+    fun confirmBackup(positions: List<UInt>, words: List<String>): Boolean {
+        val app = core ?: return false
+        val ok = try {
+            app.walletConfirmBackup(positions, words)
+        } catch (e: Exception) {
+            false
+        }
+        if (ok) reloadWallet(app)
+        return ok
+    }
+
+    /** Pays a contact and adds the payment to the conversation. */
+    fun sendNano(peer: String, amount: String) {
+        val app = core ?: return
+        _state.update { it.copy(paying = true) }
+        scope.launch {
+            try {
+                val sent = app.sendNano(peer, amount)
+                val id = sent.id ?: "payment-${sent.block}"
+                synchronized(sendLock) {
+                    append(
+                        peer,
+                        Message(
+                            id, true, "", System.currentTimeMillis(), Status.QUEUED,
+                            payment = PaymentItem(sent.block, sent.amount, sent.amountRaw, "sent"),
+                        ),
+                    )
+                    early.remove(id)?.let { setStatus(peer, id, it) }
+                }
+                refreshBalance()
+            } catch (e: Exception) {
+                fail(e)
+            } finally {
+                _state.update { it.copy(paying = false) }
+            }
+        }
+    }
+
+    /** Pays any Nano address, for example another wallet of yours. */
+    fun sendNanoToAddress(address: String, amount: String) {
+        val app = core ?: return
+        _state.update { it.copy(paying = true) }
+        scope.launch {
+            try {
+                val sent = app.sendNanoToAddress(address, amount)
+                _state.update { it.copy(info = t("Wysłano {amount} XNO.", "amount" to sent.amount)) }
+                refreshBalance()
+            } catch (e: Exception) {
+                fail(e)
+            } finally {
+                _state.update { it.copy(paying = false) }
+            }
+        }
+    }
+
+    private fun updatePayment(peer: String, id: String, status: String) = _state.update { state ->
+        val conversation = state.messages[peer] ?: return@update state
+        val updated = conversation.map { message ->
+            val payment = message.payment
+            if (message.id == id && payment != null) message.copy(payment = payment.copy(status = status)) else message
+        }
+        state.copy(messages = state.messages + (peer to updated))
+    }
 
     /**
      * Offers files picked by the person. Android hands out content links,
@@ -550,7 +757,7 @@ class Messenger(private val application: Application) : EventListener {
             // Each copy gets its own folder, so two files of one name never clash.
             val dir = File(outgoingDir, System.nanoTime().toString()).apply { mkdirs() }
             val copy = File(dir, name.replace('/', '_'))
-            val input = resolver.openInputStream(uri) ?: error("Nie można otworzyć pliku $name")
+            val input = resolver.openInputStream(uri) ?: error(t("Nie można otworzyć pliku {name}", "name" to name))
             input.use { source -> copy.outputStream().use { source.copyTo(it) } }
             val sent = app.sendFile(peer, copy.absolutePath)
             val count = recipients(peer)
@@ -671,7 +878,7 @@ class Messenger(private val application: Application) : EventListener {
      * in the middle and scaled down until it fits in a single message.
      */
     fun setAvatar(uri: Uri) = withCore { app ->
-        val picture = loadSquare(uri, 256) ?: error("Nie udało się otworzyć tego zdjęcia.")
+        val picture = loadSquare(uri, 256) ?: error(t("Nie udało się otworzyć tego zdjęcia."))
         val limit = maxAvatarLen().toLong()
         var bytes = ByteArray(0)
         for ((size, quality) in listOf(256 to 86, 256 to 72, 192 to 70, 128 to 65)) {
@@ -810,19 +1017,27 @@ class Messenger(private val application: Application) : EventListener {
 
     private fun note(key: String, text: String) = append(key, noteMessage(text))
 
-    private fun archived(message: Message, me: String): ArchivedMessage {
+    /**
+     * `key` is the conversation: a contact's messages carry their identifier
+     * as the author, so they do not come back as ours.
+     */
+    private fun archived(message: Message, me: String, key: String): ArchivedMessage {
         val file = message.file
         return ArchivedMessage(
             id = message.id,
-            author = if (message.mine) "" else message.author.orEmpty(),
+            author = if (message.mine) "" else message.author ?: key,
             atMs = message.atMs.toULong(),
             kind = when {
                 message.system -> "system"
                 message.sticker != null -> "sticker"
+                message.payment != null -> "payment"
                 file != null -> "file"
                 else -> "text"
             },
-            body = message.sticker ?: message.body,
+            // A payment keeps its block, amount in raw and what the ledger said.
+            body = message.sticker
+                ?: message.payment?.let { "${it.block} ${it.amountRaw} ${it.status}" }
+                ?: message.body,
             fileName = file?.name,
             fileSize = (file?.size ?: 0L).toULong(),
             fileHash = file?.hash,
@@ -839,7 +1054,7 @@ class Messenger(private val application: Application) : EventListener {
         )
     }
 
-    private fun restored(message: ArchivedMessage, me: String): Message {
+    private fun restored(message: ArchivedMessage, me: String, key: String): Message {
         val mine = message.author.isEmpty() && message.kind != "system"
         val file = message.fileName?.let { name ->
             val (media, duration) = describe(message.media)
@@ -859,7 +1074,7 @@ class Messenger(private val application: Application) : EventListener {
         return Message(
             id = message.id,
             mine = mine,
-            body = if (message.kind == "sticker") "" else message.body,
+            body = if (message.kind == "sticker" || message.kind == "payment") "" else message.body,
             atMs = message.atMs.toLong(),
             status = when (message.status) {
                 "queued", "sent" -> Status.SENT
@@ -867,11 +1082,24 @@ class Messenger(private val application: Application) : EventListener {
                 else -> Status.RECEIVED
             },
             file = file,
-            author = message.author.takeIf { !mine && it.isNotEmpty() },
+            // In a contact's conversation the author is the contact.
+            author = message.author.takeIf { !mine && it.isNotEmpty() && it != key },
             sticker = message.body.takeIf { message.kind == "sticker" },
+            payment = if (message.kind == "payment") restoredPayment(message.body) else null,
             system = message.kind == "system",
             reactions = message.reactions.associate { (if (it.who.isEmpty()) me else it.who) to it.reaction },
         )
+    }
+
+    private fun restoredPayment(body: String): PaymentItem? {
+        val parts = body.split(" ")
+        if (parts.size < 2) return null
+        val amount = try {
+            formatNanoAmount(parts[1])
+        } catch (e: Exception) {
+            return null
+        }
+        return PaymentItem(parts[0], amount, parts[1], parts.getOrElse(2) { "unverified" })
     }
 
     private fun receive(peer: String, message: Message) {
@@ -889,12 +1117,52 @@ class Messenger(private val application: Application) : EventListener {
                 it.copy(messages = it.messages + (peer to conversation + message), unread = unread)
             }
         }
-        if (fresh && !seen) {
-            val state = _state.value
-            val title = state.groups.firstOrNull { it.id == peer }?.name?.let { "grupa $it" }
-                ?: state.contacts.firstOrNull { it.id == peer }?.alias
-                ?: "kontakt"
-            notifier.show(peer, title, state.unread[peer] ?: 1)
+        if (!fresh) return
+        if (seen) {
+            // The conversation is on screen: only a quiet sound.
+            chime(if (message.payment != null) "kaching" else appearance.sound)
+            return
+        }
+        val state = _state.value
+        val group = state.groups.firstOrNull { it.id == peer }
+        val title = group?.name ?: state.contacts.firstOrNull { it.id == peer }?.alias ?: "Szept"
+        val authorId = message.author ?: peer
+        val author = state.contacts.firstOrNull { it.id == authorId }?.alias
+            ?: state.names[authorId]
+            ?: group?.members?.firstOrNull { it.id == authorId }?.name?.takeIf { it.isNotEmpty() }
+            ?: t("Ktoś")
+        notifier.show(
+            key = peer,
+            title = title,
+            group = group != null,
+            line = NotifiedLine(
+                authorId = authorId,
+                author = author,
+                picture = state.avatars[authorId]?.asAndroidBitmap(),
+                text = notificationText(message),
+                atMs = message.atMs,
+            ),
+            count = state.unread[peer] ?: 1,
+            preview = appearance.notifyPreview,
+            sound = appearance.sound,
+        )
+    }
+
+    /** What a notification says about a message: the start of its text, or what it is. */
+    private fun notificationText(message: Message): String {
+        val payment = message.payment
+        val file = message.file
+        val sticker = message.sticker
+        return when {
+            payment != null -> "$XNO_SIGN ${payment.amount} XNO"
+            sticker != null -> t("Naklejka: {caption}", "caption" to (FIGURES[sticker]?.caption?.let { t(it) } ?: t("Szeptuś")))
+            file?.media == "voice" -> t("🎤 Wiadomość głosowa")
+            file?.media == "gif" -> "GIF"
+            file != null -> "📎 ${file.name}"
+            else -> {
+                val line = message.body.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+                if (line.length <= PREVIEW_CHARS) line else line.take(PREVIEW_CHARS).trimEnd() + "…"
+            }
         }
     }
 

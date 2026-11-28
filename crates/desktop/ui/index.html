@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Szept</title>
   <link rel="stylesheet" href="style.css">
+  <script src="i18n-data.js"></script>
+  <script src="i18n.js"></script>
   <script src="theme.js"></script>
 </head>
 <body>
@@ -26,6 +28,20 @@
         <div class="actions">
           <button class="button" id="copy-id" type="button">Kopiuj identyfikator</button>
         </div>
+      </div>
+    </section>
+
+    <section class="wallet-card" id="wallet-card" aria-labelledby="wallet-card-title" hidden>
+      <div>
+        <h2 id="wallet-card-title">Portfel Nano</h2>
+        <p class="wallet-balance" id="wallet-card-balance" role="status">…</p>
+        <p class="warning" id="wallet-card-backup" hidden>
+          Nie masz jeszcze kopii 24 słów. Bez niej utrata komputera oznacza utratę środków.
+        </p>
+      </div>
+      <div class="actions">
+        <button class="button" id="wallet-card-backup-do" type="button" hidden>Zrób kopię</button>
+        <button class="button primary" id="wallet-open" type="button">Otwórz portfel</button>
       </div>
     </section>
 
@@ -123,6 +139,11 @@
       <p class="hint">Widzą je kontakty i członkowie Twoich grup, którzy nie mają Cię w kontaktach.</p>
     </section>
 
+    <section aria-labelledby="language-title">
+      <h3 id="language-title">Język</h3>
+      <select id="language" aria-labelledby="language-title"></select>
+    </section>
+
     <section aria-labelledby="theme-title">
       <h3 id="theme-title">Motyw</h3>
       <div class="themes" id="themes" role="radiogroup" aria-labelledby="theme-title"></div>
@@ -147,6 +168,18 @@
       </div>
     </section>
 
+    <section aria-labelledby="sound-title">
+      <h3 id="sound-title">Dźwięk i powiadomienia</h3>
+      <label class="check"><input type="checkbox" id="notify-preview">
+        <span>Pokazuj w powiadomieniach początek wiadomości</span></label>
+      <p class="hint">
+        Powiadomienie zawsze pokazuje, kto pisze, i jego zdjęcie. Wyłącz podgląd, jeśli inni
+        widzą Twój ekran.
+      </p>
+      <p class="hint">Dźwięk nowej wiadomości:</p>
+      <div class="sound-choices" id="sound-choices" role="radiogroup" aria-labelledby="sound-title"></div>
+    </section>
+
     <section aria-labelledby="prefs-title">
       <h3 id="prefs-title">Twoje ustawienia</h3>
       <p class="hint">
@@ -160,11 +193,22 @@
       </div>
     </section>
 
+    <section aria-labelledby="wallet-title">
+      <h3 id="wallet-title">Portfel Nano (XNO)</h3>
+      <p class="hint" id="wallet-settings-hint"></p>
+      <div class="actions">
+        <button class="button" id="wallet-toggle" type="button"></button>
+        <button class="button" id="wallet-restore-open" type="button">Przywróć z 24 słów…</button>
+        <button class="button" id="wallet-nodes-open" type="button">Węzły Nano…</button>
+      </div>
+    </section>
+
     <section aria-labelledby="archive-title">
       <h3 id="archive-title">Archiwum</h3>
       <p class="hint">
         Zapisz rozmowy, kontakty i grupy w zaszyfrowanym pliku, żeby wczytać je po
-        aktualizacji, ponownej instalacji albo na nowym komputerze.
+        aktualizacji, ponownej instalacji albo na nowym komputerze. Jeśli masz portfel
+        Nano, jego seed zawsze trafia do archiwum.
       </p>
       <div class="actions">
         <button class="button" id="archive-export" type="button">Zapisz archiwum…</button>
@@ -260,8 +304,147 @@
     </div>
   </dialog>
 
+  <dialog id="wallet-intro-dialog" aria-labelledby="wallet-intro-title">
+    <h2 id="wallet-intro-title">Włączyć portfel Nano?</h2>
+    <p>
+      Szept utworzy na tym komputerze portfel kryptowaluty Nano (XNO). Kontakty zobaczą Twój
+      adres i będą mogły przesłać Ci środki prosto z rozmowy, a Ty im. Przelewy Nano nie
+      mają opłat i docierają w kilka sekund.
+    </p>
+    <p>
+      Portfel to 24 słowa, które za chwilę zobaczysz. Zapisz je na papierze: otwierają ten
+      sam portfel w Szepcie na innym urządzeniu i w każdym portfelu Nano (Nault, Natrium…).
+    </p>
+    <p class="warning">
+      To portfel na drobne kwoty. Przelewów nie da się cofnąć, a kto pozna 24 słowa,
+      może zabrać środki. Do obsługi sieci Nano Szept łączy się z publicznym węzłem, który
+      widzi Twój adres IP i adres portfela (nigdy rozmów).
+    </p>
+    <p class="error" id="wallet-intro-error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button class="button" type="button" data-close>Nie teraz</button>
+      <button class="button primary" id="wallet-intro-confirm" type="button">Utwórz portfel</button>
+    </div>
+  </dialog>
+
+  <dialog id="wallet-dialog" class="settings" aria-labelledby="wallet-dialog-title">
+    <h2 id="wallet-dialog-title">Portfel Nano</h2>
+    <div class="wallet-address-row">
+      <div class="qr-medium" id="wallet-qr"></div>
+      <div>
+        <p class="hint">Twój adres</p>
+        <p class="identifier" id="wallet-address"></p>
+        <div class="actions">
+          <button class="button" id="wallet-copy" type="button">Kopiuj adres</button>
+        </div>
+      </div>
+    </div>
+    <p class="wallet-balance large" id="wallet-balance" role="status">…</p>
+    <p class="hint" id="wallet-receivable" hidden></p>
+    <div class="actions">
+      <button class="button" id="wallet-refresh" type="button">Odśwież</button>
+      <button class="button" id="wallet-receive" type="button">Odbierz teraz</button>
+      <button class="button" id="wallet-send-open" type="button">Wyślij na adres…</button>
+      <button class="button" id="wallet-words-open" type="button">Pokaż 24 słowa…</button>
+    </div>
+    <p class="hint">
+      Środki od kontaktów odbierają się same, gdy Szept jest otwarty. Ten sam portfel możesz
+      otworzyć w każdym portfelu Nano, wpisując 24 słowa.
+    </p>
+    <p class="error" id="wallet-error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button class="button primary" type="button" data-close>Zamknij</button>
+    </div>
+  </dialog>
+
+  <dialog id="words-dialog" aria-labelledby="words-title">
+    <form id="words-form" method="dialog">
+      <h2 id="words-title">Twoje 24 słowa</h2>
+      <div id="words-show">
+        <p class="warning">
+          Zapisz je na papierze, po kolei, i schowaj. Nie rób zrzutu ekranu ani zdjęcia.
+          Kto je pozna, może zabrać środki. Szept nigdy nie poprosi Cię o nie w rozmowie.
+        </p>
+        <ol class="words" id="words-list"></ol>
+      </div>
+      <div id="words-quiz" hidden>
+        <p>Sprawdźmy, czy masz kopię. Wpisz słowa o tych numerach:</p>
+        <div id="words-quiz-fields"></div>
+      </div>
+      <p class="error" id="words-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" id="words-cancel" type="button" data-close>Później</button>
+        <button class="button primary" id="words-next" type="submit">Zapisałem, dalej</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="restore-dialog" aria-labelledby="restore-title">
+    <form id="restore-form" method="dialog">
+      <h2 id="restore-title">Przywróć portfel</h2>
+      <p class="hint">
+        Wpisz 24 słowa portfela Nano, z Szeptu albo z innego portfela (Nault, Natrium), lub
+        seed w postaci 64 znaków szesnastkowych.
+      </p>
+      <label class="field">24 słowa
+        <textarea id="restore-words" rows="4" spellcheck="false" autocomplete="off" required></textarea>
+      </label>
+      <p class="hint" id="restore-note" hidden>
+        Portfel, który jest teraz na tym komputerze, zostanie odłożony do pliku w folderze
+        danych Szeptu, nie usunięty. Upewnij się, że masz jego 24 słowa.
+      </p>
+      <p class="error" id="restore-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" type="submit">Przywróć</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="nodes-dialog" aria-labelledby="nodes-title">
+    <form id="nodes-form" method="dialog">
+      <h2 id="nodes-title">Węzły Nano</h2>
+      <p class="hint">
+        Adresy węzłów RPC, jeden w wierszu, w kolejności prób. Pusto oznacza publiczne węzły
+        domyślne. Własny węzeł w sieci lokalnej może mieć adres http://.
+      </p>
+      <label class="field">Węzły
+        <textarea id="nodes-list" rows="5" spellcheck="false" autocomplete="off"></textarea>
+      </label>
+      <p class="error" id="nodes-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" id="nodes-default" type="button">Domyślne</button>
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" type="submit">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="send-dialog" aria-labelledby="send-title">
+    <form id="send-form" method="dialog">
+      <h2 id="send-title">Wyślij XNO na adres</h2>
+      <div id="send-fields">
+        <label class="field">Adres Nano
+          <textarea id="send-address" rows="2" spellcheck="false" autocomplete="off" required></textarea>
+        </label>
+        <label class="field">Kwota w XNO
+          <input id="send-amount" inputmode="decimal" autocomplete="off" required placeholder="np. 0,5">
+        </label>
+      </div>
+      <p class="confirm-text" id="send-summary" hidden></p>
+      <p class="hint" id="send-progress" role="status" hidden></p>
+      <p class="error" id="send-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" id="send-confirm" type="submit">Dalej</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="vendor/jsQR.js"></script>
+  <script src="sounds-data.js"></script>
   <script src="common.js"></script>
   <script src="main.js"></script>
+  <script src="wallet.js"></script>
 </body>
 </html>

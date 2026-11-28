@@ -31,6 +31,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 komunikator-core = { path = "../core" }
+komunikator-nano = { path = "../nano" }
 qrcode = { version = "0.14", default-features = false }
 thiserror = "2"
 tokio.workspace = true

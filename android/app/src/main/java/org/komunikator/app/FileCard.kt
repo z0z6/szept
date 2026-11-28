@@ -105,12 +105,12 @@ fun FileCard(file: FileItem, mine: Boolean, from: String, onDownload: () -> Unit
             Surface(color = colors.errorContainer, shape = RoundedCornerShape(10.dp)) {
                 Column(modifier = Modifier.padding(8.dp)) {
                     Text(
-                        "Program od: $from. Uruchamiaj go tylko, jeśli wiesz, co to jest.",
+                        t("Program od: {from}. Uruchamiaj go tylko, jeśli wiesz, co to jest.", "from" to from),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onErrorContainer,
                     )
                     Text(
-                        "Odcisk: " + file.hash.take(16).chunked(4).joinToString(" "),
+                        t("Odcisk: ") + file.hash.take(16).chunked(4).joinToString(" "),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = colors.onErrorContainer,
@@ -127,7 +127,7 @@ fun FileCard(file: FileItem, mine: Boolean, from: String, onDownload: () -> Unit
         }
         if (file.transfer == Transfer.FAILED) {
             Text(
-                "Pobieranie przerwane. Nadawca musi mieć Szept włączony; pobieranie wznowi się od miejsca przerwania.",
+                t("Pobieranie przerwane. Nadawca musi mieć Szept włączony; pobieranie wznowi się od miejsca przerwania."),
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.error,
             )
@@ -141,19 +141,19 @@ fun FileCard(file: FileItem, mine: Boolean, from: String, onDownload: () -> Unit
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             when {
-                file.transfer == Transfer.OFFERED -> Button(onClick = onDownload) { Text("Pobierz") }
-                file.transfer == Transfer.FAILED -> Button(onClick = onDownload) { Text("Wznów") }
+                file.transfer == Transfer.OFFERED -> Button(onClick = onDownload) { Text(t("Pobierz")) }
+                file.transfer == Transfer.FAILED -> Button(onClick = onDownload) { Text(t("Wznów")) }
                 local -> {
                     val label = when {
-                        file.name.endsWith(".apk", ignoreCase = true) -> "Zainstaluj"
-                        else -> "Otwórz"
+                        file.name.endsWith(".apk", ignoreCase = true) -> t("Zainstaluj")
+                        else -> t("Otwórz")
                     }
                     OutlinedButton(onClick = { open(context, File(path!!)) }) { Text(label) }
                     if (!mine) {
                         OutlinedButton(onClick = {
                             saving = file
                             saveAs.launch(file.name)
-                        }) { Text("Zapisz jako…") }
+                        }) { Text(t("Zapisz jako…")) }
                     }
                 }
             }
@@ -179,8 +179,8 @@ private fun formatSize(bytes: Long): String {
 private fun describe(file: FileItem): String = when (file.transfer) {
     Transfer.DOWNLOADING -> "${formatSize(file.done)} z ${formatSize(file.size)}"
     Transfer.SAVED -> "${formatSize(file.size)}, zapisany"
-    Transfer.SHARED -> "${formatSize(file.size)}, udostępniony z tego telefonu"
-    Transfer.ARCHIVED -> "${formatSize(file.size)}, z archiwum, bez zawartości"
+    Transfer.SHARED -> t("{size}, udostępniony z tego telefonu", "size" to formatSize(file.size))
+    Transfer.ARCHIVED -> t("{size}, z archiwum, bez zawartości", "size" to formatSize(file.size))
     else -> formatSize(file.size)
 }
 
@@ -231,7 +231,7 @@ private fun open(context: Context, file: File) {
     } catch (e: ActivityNotFoundException) {
         Toast.makeText(
             context,
-            "Żadna aplikacja nie otwiera tego typu plików. Użyj „Zapisz jako…”.",
+            t("Żadna aplikacja nie otwiera tego typu plików. Użyj „Zapisz jako…”."),
             Toast.LENGTH_LONG,
         ).show()
     }
@@ -239,9 +239,9 @@ private fun open(context: Context, file: File) {
 
 /** Copies a received file to a place the person picked. Returns a note for them. */
 private fun copyOut(context: Context, source: File, target: Uri): String = try {
-    val output = context.contentResolver.openOutputStream(target) ?: error("brak dostępu")
+    val output = context.contentResolver.openOutputStream(target) ?: error(t("brak dostępu"))
     output.use { sink -> source.inputStream().use { it.copyTo(sink) } }
-    "Zapisano ${source.name}"
+    t("Zapisano {name}", "name" to source.name)
 } catch (e: Exception) {
-    "Nie udało się zapisać: ${e.message}"
+    t("Nie udało się zapisać: {message}", "message" to e.message)
 }

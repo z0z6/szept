@@ -124,6 +124,12 @@ pub enum Event {
     Left { peer: EndpointId, group: GroupId },
     /// A contact sent their display name.
     Name { peer: EndpointId, name: String },
+    /// A contact sent their Nano account, or `None` when they turned
+    /// their wallet off.
+    Wallet {
+        peer: EndpointId,
+        account: Option<[u8; 32]>,
+    },
 }
 
 /// A file this device offered to a contact.
@@ -649,6 +655,7 @@ impl Inner {
             Frame::Group { info } => self.emit(Event::Group { peer, info }).await,
             Frame::Leave { group } => self.emit(Event::Left { peer, group }).await,
             Frame::Name { name } => self.emit(Event::Name { peer, name }).await,
+            Frame::Wallet { account } => self.emit(Event::Wallet { peer, account }).await,
         }
     }
 

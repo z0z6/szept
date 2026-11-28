@@ -7,6 +7,7 @@
 mod archive;
 mod engine;
 mod passwords;
+mod wallet;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -25,7 +26,12 @@ use komunikator_core::{
     Member, MessageId, Network, Node, Outgoing, Post, Signal, contacts, files, groups, identity,
     protocol::{MAX_AVATAR_LEN, MAX_GROUP_MEMBERS, MAX_MEDIA_SIZE, is_code, is_name},
 };
-use tokio::{runtime::Runtime, sync::mpsc, task::JoinHandle};
+use komunikator_nano::{Account, Seed, format_xno, hex, parse_xno};
+use tokio::{
+    runtime::Runtime,
+    sync::{Notify, mpsc},
+    task::JoinHandle,
+};
 
 pub use crate::archive::{
     ArchivedConversation, ArchivedMessage, ArchivedReaction, ImportedArchive,
@@ -188,6 +194,38 @@ pub enum ChatEvent {
         group: String,
         reason: String,
     },
+    /// The contact turned their Nano wallet on or off. Read the address
+    /// with [`App::contact_wallet`].
+    ContactWalletChanged {
+        peer: String,
+    },
+    /// The contact says they paid us. Show it as unchecked until
+    /// [`ChatEvent::PaymentChecked`] says "confirmed".
+    Payment {
+        peer: String,
+        id: String,
+        sent_at_ms: u64,
+        /// The hash of the send block, in hex: look it up in any explorer.
+        block: String,
+        amount_raw: String,
+        /// In XNO, such as "1.5".
+        amount: String,
+    },
+    /// What the ledger says about the payment `id`: "confirmed",
+    /// "pending" (sent, not confirmed yet), "invalid" (no such send of that
+    /// amount to us: do not trust it), "unverified" (no Nano node answered)
+    /// or "no-wallet" (our wallet is off).
+    PaymentChecked {
+        peer: String,
+        id: String,
+        status: String,
+    },
+    /// Money arrived in our wallet and was received.
+    NanoReceived {
+        payment: ReceivedPayment,
+    },
+    /// The wallet's balance may have changed: read it again.
+    WalletChanged,
 }
 
 /// A file just offered to a contact or a group.
@@ -197,6 +235,57 @@ pub struct SentFile {
     pub name: String,
     pub size: u64,
     pub hash: String,
+}
+
+/// The state of our Nano wallet.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct WalletStatus {
+    /// A seed exists on this device, whether the wallet is on or not.
+    pub exists: bool,
+    pub enabled: bool,
+    /// The person proved they wrote the 24 words down. Until then, show a
+    /// reminder: without the words, a lost phone means lost money.
+    pub backed_up: bool,
+    /// Our `nano_` address, when a seed exists.
+    pub address: Option<String>,
+    /// The Nano nodes in use, in order.
+    pub nodes: Vec<String>,
+}
+
+/// Our balance: confirmed, and sent to us but not yet received.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct WalletBalance {
+    /// In XNO, such as "1.5".
+    pub balance: String,
+    pub balance_raw: String,
+    pub receivable: String,
+    pub receivable_raw: String,
+}
+
+/// A payment that reached our wallet.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReceivedPayment {
+    /// The hash of the sender's send block.
+    pub block: String,
+    pub amount: String,
+    pub amount_raw: String,
+    /// The sender's address, empty when the node did not say.
+    pub from: String,
+    /// The contact with that address, if any.
+    pub peer: Option<String>,
+}
+
+/// A payment that left our wallet.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SentPayment {
+    /// The chat message telling the contact, when there is one.
+    pub id: Option<String>,
+    /// The hash of our send block.
+    pub block: String,
+    pub amount: String,
+    pub amount_raw: String,
+    /// Where it went.
+    pub address: String,
 }
 
 /// One person in a group. `name` is what the owner calls them: show the
@@ -301,6 +390,49 @@ pub fn max_avatar_len() -> u64 {
     MAX_AVATAR_LEN as u64
 }
 
+/// Reads an amount in XNO ("1", "0.5", "1,5") and returns it in raw.
+#[uniffi::export]
+pub fn parse_nano_amount(text: String) -> Result<String> {
+    Ok(parse_xno(&text)?.to_string())
+}
+
+/// Writes an amount in raw as XNO, such as "1.5".
+#[uniffi::export]
+pub fn format_nano_amount(raw: String) -> Result<String> {
+    let raw: u128 = raw.trim().parse().context("not an amount in raw")?;
+    Ok(format_xno(raw))
+}
+
+/// Checks a Nano address or `nano:` link (including its checksum, which
+/// catches typos) and returns the bare `nano_` address.
+#[uniffi::export]
+pub fn normalize_nano_address(text: String) -> Result<String> {
+    Ok(Account::parse_link(&text)?.to_string())
+}
+
+/// The text for a QR code other Nano wallets understand: `nano:<address>`,
+/// with an amount in raw when one is given.
+#[uniffi::export]
+pub fn nano_link(address: String, amount_raw: Option<String>) -> Result<String> {
+    let account = Account::parse_link(&address)?;
+    Ok(match amount_raw {
+        Some(raw) if !raw.trim().is_empty() => {
+            let raw: u128 = raw.trim().parse().context("not an amount in raw")?;
+            format!("nano:{account}?amount={raw}")
+        }
+        _ => format!("nano:{account}"),
+    })
+}
+
+/// The public Nano nodes used when none are set.
+#[uniffi::export]
+pub fn default_nano_nodes() -> Vec<String> {
+    komunikator_nano::rpc::DEFAULT_NODES
+        .iter()
+        .map(|node| (*node).to_owned())
+        .collect()
+}
+
 /// Receives events. Called on a background thread.
 #[uniffi::export(with_foreign)]
 pub trait EventListener: Send + Sync {
@@ -342,9 +474,64 @@ pub(crate) struct Shared {
     avatar_path: PathBuf,
     /// Our own profile picture, empty when there is none.
     pub(crate) avatar: Mutex<Vec<u8>>,
+    pub(crate) data_dir: PathBuf,
+    /// The Nano wallet, off until the person turns it on.
+    pub(crate) wallet: Mutex<wallet::State>,
+    /// Contacts' Nano addresses, by identifier.
+    peer_wallets: Mutex<BTreeMap<String, String>>,
+    /// Wakes the wallet up to receive at once.
+    pub(crate) wallet_kick: Arc<Notify>,
 }
 
 impl Shared {
+    pub(crate) fn active_wallet(&self) -> Option<Arc<komunikator_nano::Wallet>> {
+        self.wallet.lock().unwrap().active.clone()
+    }
+
+    /// What to tell contacts about our wallet: our account while it is on,
+    /// `None` after it was turned off, nothing when there never was one.
+    pub(crate) fn wallet_signal(&self) -> Option<Signal> {
+        let state = self.wallet.lock().unwrap();
+        let account = state.account?;
+        Some(Signal::Wallet(
+            state.active.is_some().then_some(*account.as_bytes()),
+        ))
+    }
+
+    /// Stores a contact's Nano account. Returns `true` on a change.
+    pub(crate) fn store_peer_wallet(&self, peer: &EndpointId, account: Option<[u8; 32]>) -> bool {
+        let mut wallets = self.peer_wallets.lock().unwrap();
+        let key = peer.to_string();
+        let address = account.map(|bytes| Account(bytes).to_string());
+        if wallets.get(&key) == address.as_ref() {
+            return false;
+        }
+        match address {
+            Some(address) => wallets.insert(key, address),
+            None => wallets.remove(&key),
+        };
+        let _ = save_json(&wallet::peers_path(&self.data_dir), &*wallets);
+        true
+    }
+
+    pub(crate) fn peer_wallet(&self, peer: &EndpointId) -> Option<Account> {
+        self.peer_wallets
+            .lock()
+            .unwrap()
+            .get(&peer.to_string())
+            .and_then(|address| address.parse().ok())
+    }
+
+    /// The contact whose wallet has `address`.
+    pub(crate) fn peer_with_wallet(&self, address: &str) -> Option<String> {
+        self.peer_wallets
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, known)| known.as_str() == address)
+            .map(|(peer, _)| peer.clone())
+    }
+
     pub(crate) fn avatar_file(&self, peer: &EndpointId) -> PathBuf {
         self.avatars_dir.join(format!("{peer}.img"))
     }
@@ -379,6 +566,7 @@ impl Shared {
 
     pub(crate) fn forget(&self, peer: &EndpointId) {
         let _ = fs::remove_file(self.avatar_file(peer));
+        self.store_peer_wallet(peer, None);
         let mut names = self.names.lock().unwrap();
         if names.remove(&peer.to_string()).is_some() {
             let _ = save_json(&self.names_path, &*names);
@@ -480,6 +668,7 @@ struct Running {
     node: Node,
     commands: mpsc::UnboundedSender<Command>,
     engine: JoinHandle<()>,
+    receiver: JoinHandle<()>,
     listener: Arc<dyn EventListener>,
 }
 
@@ -511,6 +700,8 @@ impl App {
             .ok()
             .filter(|image| image.len() <= MAX_AVATAR_LEN && files::is_picture(image))
             .unwrap_or_default();
+        let wallet = wallet::State::load(&data_dir)?;
+        let peer_wallets = wallet::load_peers(&data_dir);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("szept")
@@ -540,6 +731,10 @@ impl App {
                 avatars_dir: data_dir.join("avatars"),
                 avatar_path: avatar_path(&data_dir),
                 avatar: Mutex::new(avatar),
+                data_dir: data_dir.clone(),
+                wallet: Mutex::new(wallet),
+                peer_wallets: Mutex::new(peer_wallets),
+                wallet_kick: Arc::new(Notify::new()),
             }),
             identity,
         }))
@@ -652,10 +847,16 @@ impl App {
             // Without a lookup service there is nobody to ask for addresses.
             self.network == Network::Public,
         ));
+        let receiver = self.runtime.spawn(wallet::receive_loop(
+            self.shared.clone(),
+            listener.clone(),
+            self.shared.wallet_kick.clone(),
+        ));
         *running = Some(Running {
             node,
             commands,
             engine,
+            receiver,
             listener,
         });
         Ok(())
@@ -665,6 +866,7 @@ impl App {
     pub fn stop(&self) {
         if let Some(running) = self.running.lock().unwrap().take() {
             running.engine.abort();
+            running.receiver.abort();
             self.runtime.block_on(running.node.shutdown());
         }
     }
@@ -917,7 +1119,8 @@ impl App {
     /// reinstall: optionally our identity key, contacts, groups, names,
     /// pictures, the conversations the app hands over, with their voice
     /// messages and GIFs, and the app's `preferences` (theme, text size…).
-    /// Other files are listed, not included.
+    /// Other files are listed, not included. The Nano wallet seed, when
+    /// there is one, always goes in: money must survive a lost phone.
     ///
     /// The password must pass [`password_strength`]. Deriving the key takes
     /// 128 MiB of memory and about a second.
@@ -932,9 +1135,11 @@ impl App {
         conversations: Vec<ArchivedConversation>,
         preferences: HashMap<String, String>,
     ) -> Result<()> {
+        let wallet = wallet::read_seed(&self.shared.data_dir)?.map(|seed| *seed.bytes());
         archive::export(
             &self.shared,
             include_identity.then(|| self.identity.secret_bytes()),
+            wallet,
             Path::new(&path),
             &password,
             conversations,
@@ -982,6 +1187,208 @@ impl App {
             })
             .map_or(0, |socket| socket.port())
     }
+
+    /// The state of our Nano wallet. Quick: reads nothing from the network.
+    pub fn wallet_status(&self) -> WalletStatus {
+        let state = self.shared.wallet.lock().unwrap();
+        let nodes = wallet::rpc(&state.settings)
+            .map(|rpc| rpc.nodes().to_vec())
+            .unwrap_or_default();
+        WalletStatus {
+            exists: state.account.is_some(),
+            enabled: state.active.is_some(),
+            backed_up: state.settings.backed_up,
+            address: state.account.map(|account| account.to_string()),
+            nodes,
+        }
+    }
+
+    /// Turns the wallet on. The first time, this creates a new seed; after
+    /// that, it opens the one already on this device. A seed is never
+    /// replaced here. Contacts learn our address on the next connection.
+    /// Show [`App::wallet_words`] right after the first time.
+    pub fn wallet_create(&self) -> Result<WalletStatus> {
+        let data_dir = &self.shared.data_dir;
+        {
+            let mut state = self.shared.wallet.lock().unwrap();
+            if wallet::read_seed(data_dir)?.is_none() {
+                wallet::store_seed(data_dir, &Seed::generate())?;
+                state.settings.backed_up = false;
+            }
+            state.open(data_dir)?;
+        }
+        self.wallet_announced();
+        Ok(self.wallet_status())
+    }
+
+    /// The 24 words that restore the wallet here or in any Nano wallet
+    /// (Nault, Natrium…). Show them only on request, never in a log.
+    pub fn wallet_words(&self) -> Result<Vec<String>> {
+        let seed = wallet::read_seed(&self.shared.data_dir)?.context("there is no wallet yet")?;
+        Ok(seed.words().iter().map(|word| word.to_string()).collect())
+    }
+
+    /// Three different positions (1 to 24) to ask about after showing the
+    /// words, to check they were written down.
+    pub fn wallet_backup_quiz(&self) -> Vec<u32> {
+        let mut positions: Vec<u32> = Vec::new();
+        while positions.len() < 3 {
+            let position = (rand::random::<u32>() % 24) + 1;
+            if !positions.contains(&position) {
+                positions.push(position);
+            }
+        }
+        positions.sort_unstable();
+        positions
+    }
+
+    /// Checks the words given for `positions` (1 to 24, as from
+    /// [`App::wallet_backup_quiz`]). On a match the backup counts as done.
+    pub fn wallet_confirm_backup(&self, positions: Vec<u32>, words: Vec<String>) -> Result<bool> {
+        if positions.is_empty() || positions.len() != words.len() {
+            return Err(anyhow!("give one word for each position").into());
+        }
+        let real = self.wallet_words()?;
+        let matches = positions.iter().zip(&words).all(|(position, word)| {
+            let index = (*position as usize).wrapping_sub(1);
+            real.get(index)
+                .is_some_and(|real| real.eq_ignore_ascii_case(word.trim()))
+        });
+        if matches {
+            let mut state = self.shared.wallet.lock().unwrap();
+            state.settings.backed_up = true;
+            wallet::save_settings(&self.shared.data_dir, &state.settings)?;
+        }
+        Ok(matches)
+    }
+
+    /// Restores a wallet from its 24 words (or the seed in hex) and turns it
+    /// on. A different seed that was here is kept aside in the data
+    /// directory as `wallet-<time>.seed.old`, never deleted.
+    pub fn wallet_restore(&self, backup: String) -> Result<WalletStatus> {
+        let seed = Seed::parse(&backup)?;
+        let data_dir = &self.shared.data_dir;
+        {
+            let mut state = self.shared.wallet.lock().unwrap();
+            wallet::store_seed(data_dir, &seed)?;
+            state.settings.backed_up = true;
+            state.open(data_dir)?;
+        }
+        self.wallet_announced();
+        self.shared.wallet_kick.notify_one();
+        Ok(self.wallet_status())
+    }
+
+    /// Turns the wallet off: contacts stop seeing our address and nothing
+    /// is received automatically. The seed stays, and so does the money:
+    /// [`App::wallet_create`] turns the same wallet back on.
+    pub fn wallet_disable(&self) -> Result<()> {
+        {
+            let mut state = self.shared.wallet.lock().unwrap();
+            state.active = None;
+            state.settings.enabled = false;
+            wallet::save_settings(&self.shared.data_dir, &state.settings)?;
+        }
+        self.wallet_announced();
+        Ok(())
+    }
+
+    /// Sets the Nano nodes to use, in order (`https://`, or `http://` on
+    /// this machine or the local network). An empty list means the defaults.
+    pub fn wallet_set_nodes(&self, nodes: Vec<String>) -> Result<()> {
+        let mut state = self.shared.wallet.lock().unwrap();
+        let mut settings = state.settings.clone();
+        settings.nodes = nodes
+            .into_iter()
+            .map(|node| node.trim().to_owned())
+            .filter(|node| !node.is_empty())
+            .collect();
+        wallet::rpc(&settings)?;
+        state.settings = settings;
+        wallet::save_settings(&self.shared.data_dir, &state.settings)?;
+        if state.active.is_some() {
+            state.open(&self.shared.data_dir)?;
+        }
+        Ok(())
+    }
+
+    /// Our balance, from a Nano node. Blocks for up to half a minute: call
+    /// off the main thread.
+    pub fn wallet_balance(&self) -> Result<WalletBalance> {
+        let wallet = self.active_wallet()?;
+        let balance = self.runtime.block_on(wallet.balance())?;
+        Ok(WalletBalance {
+            balance: format_xno(balance.balance),
+            balance_raw: balance.balance.to_string(),
+            receivable: format_xno(balance.receivable),
+            receivable_raw: balance.receivable.to_string(),
+        })
+    }
+
+    /// Receives what was sent to us right now, instead of waiting for the
+    /// next automatic round. Each payment is also reported as
+    /// [`ChatEvent::NanoReceived`]. Slow: call off the main thread.
+    pub fn wallet_receive(&self) -> Result<Vec<ReceivedPayment>> {
+        let wallet = self.active_wallet()?;
+        let listener = self.listener();
+        Ok(self.runtime.block_on(async {
+            match &listener {
+                Some(listener) => {
+                    wallet::receive_now(&self.shared, &wallet, listener.as_ref()).await
+                }
+                None => wallet::receive_now(&self.shared, &wallet, &Silent).await,
+            }
+        }))
+    }
+
+    /// The Nano address the contact `peer` shared with us, if their wallet is on.
+    pub fn contact_wallet(&self, peer: String) -> Option<String> {
+        let peer = parse_id(&peer).ok()?;
+        self.shared
+            .peer_wallet(&peer)
+            .map(|account| account.to_string())
+    }
+
+    /// Pays the contact `to` `amount` XNO (such as "0.5") to the address
+    /// they shared, then tells them in the chat. Money cannot be taken
+    /// back: ask the person to confirm the amount and the recipient first.
+    ///
+    /// Computing the proof-of-work can take from a moment up to a minute or
+    /// two on a slow phone. Call off the main thread. The app must be online.
+    pub fn send_nano(&self, to: String, amount: String) -> Result<SentPayment> {
+        let peer = parse_id(&to)?;
+        if !self.shared.is_contact(&peer) {
+            return Err(anyhow!("payments go only to contacts").into());
+        }
+        let account = self
+            .shared
+            .peer_wallet(&peer)
+            .context("this contact has no Nano wallet turned on")?;
+        // The chat note must be able to follow the money.
+        self.node()?;
+        let mut sent = self.pay(account, &amount)?;
+        let amount_raw: u128 = sent.amount_raw.parse().context("bad amount")?;
+        let block: [u8; 32] = komunikator_nano::from_hex(&sent.block)?;
+        let message = Outgoing::post(
+            None,
+            Post::Payment {
+                block,
+                amount: amount_raw,
+            },
+        )?;
+        // The money already left: a failure here must not look like a
+        // failed payment.
+        sent.id = self.queue_message(&peer.to_string(), message).ok();
+        Ok(sent)
+    }
+
+    /// Pays `amount` XNO to any Nano address or `nano:` link, for example
+    /// to move money to another wallet or an exchange. Nobody is told in
+    /// the chat. Slow: call off the main thread.
+    pub fn send_nano_to_address(&self, address: String, amount: String) -> Result<SentPayment> {
+        let account = Account::parse_link(&address)?;
+        self.pay(account, &amount)
+    }
 }
 
 /// Reads an archive written by [`App::export_archive`] into the data
@@ -1007,7 +1414,46 @@ pub fn import_archive(
     )?)
 }
 
+/// Listens to nothing, for calls made while the app is offline.
+struct Silent;
+
+impl EventListener for Silent {
+    fn on_event(&self, _event: ChatEvent) {}
+}
+
 impl App {
+    fn active_wallet(&self) -> Result<Arc<komunikator_nano::Wallet>> {
+        self.shared
+            .active_wallet()
+            .ok_or_else(|| anyhow!("the Nano wallet is off").into())
+    }
+
+    fn listener(&self) -> Option<Arc<dyn EventListener>> {
+        let running = self.running.lock().unwrap();
+        running.as_ref().map(|running| running.listener.clone())
+    }
+
+    fn pay(&self, account: Account, amount: &str) -> Result<SentPayment> {
+        let wallet = self.active_wallet()?;
+        let raw = parse_xno(amount)?;
+        let block = self.runtime.block_on(wallet.send(account, raw))?;
+        if let Some(listener) = self.listener() {
+            listener.on_event(ChatEvent::WalletChanged);
+        }
+        Ok(SentPayment {
+            id: None,
+            block: hex(&block),
+            amount: format_xno(raw),
+            amount_raw: raw.to_string(),
+            address: account.to_string(),
+        })
+    }
+
+    /// Tells everyone connected what changed about our wallet.
+    fn wallet_announced(&self) {
+        let _ = self.command(Command::ProfileChanged);
+    }
+
     fn target(&self, to: &str) -> Result<Target> {
         if let Ok(group) = to.trim().parse::<GroupId>() {
             let info = self

@@ -8,15 +8,15 @@ let firstRender = true;
 
 const STATUS = {
   queued: {
-    label: "W kolejce",
+    label: t("W kolejce"),
     svg: '<svg viewBox="0 0 16 12" aria-hidden="true"><circle cx="8" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 3.6V6l1.6 1.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
   },
   sent: {
-    label: "Wysłano",
+    label: t("Wysłano"),
     svg: '<svg viewBox="0 0 16 12" aria-hidden="true"><path d="M3 6.4 6 9.2 12.6 2.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   },
   delivered: {
-    label: "Dostarczono",
+    label: t("Dostarczono"),
     svg: '<svg viewBox="0 0 16 12" aria-hidden="true"><path d="M1 6.4 4 9.2 10.6 2.8M6.6 8.4l.8.8L14 2.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   },
 };
@@ -31,7 +31,7 @@ const KIND_ICON = {
   other: "📎",
 };
 
-const sizeFormat = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 });
+const sizeFormat = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 });
 
 function formatSize(bytes) {
   const units = ["B", "kB", "MB", "GB", "TB"];
@@ -81,14 +81,14 @@ function voicePlayer(message) {
   const total = file.duration_ms || 0;
   const audio = new Audio(tauri.core.convertFileSrc(file.path));
   audio.preload = "metadata";
-  const button = el("button", { class: "voice-play", type: "button", "aria-label": "Odtwórz" });
+  const button = el("button", { class: "voice-play", type: "button", "aria-label": t("Odtwórz") });
   const seek = el("input", {
     class: "voice-seek",
     type: "range",
     min: "0",
     max: "1000",
     value: "0",
-    "aria-label": "Postęp nagrania",
+    "aria-label": t("Postęp nagrania"),
   });
   const time = el("span", { class: "voice-time", text: formatDuration(total) });
 
@@ -101,13 +101,13 @@ function voicePlayer(message) {
     time.textContent = audio.paused && done === 0 ? formatDuration(whole) : formatDuration(done);
     const on = !audio.paused;
     button.classList.toggle("on", on);
-    button.setAttribute("aria-label", on ? "Pauza" : "Odtwórz");
+    button.setAttribute("aria-label", on ? t("Pauza") : t("Odtwórz"));
   };
   button.addEventListener("click", () => {
     if (audio.paused) {
       if (playing && playing !== audio) playing.pause();
       playing = audio;
-      audio.play().catch(() => showProblem("Nie udało się odtworzyć nagrania."));
+      audio.play().catch(() => showProblem(t("Nie udało się odtworzyć nagrania.")));
     } else {
       audio.pause();
     }
@@ -147,20 +147,20 @@ function mediaContent(message) {
     }
     return node;
   }
-  const what = file.media === "voice" ? `Wiadomość głosowa, ${formatDuration(file.duration_ms || 0)}` : "GIF";
+  const what = file.media === "voice" ? t("Wiadomość głosowa, {duration}", { duration: formatDuration(file.duration_ms || 0) }) : "GIF";
   const box = el("div", { class: "media-wait" }, el("span", { text: what }));
   if (file.transfer === "failed") {
     box.append(
-      el("span", { class: "file-error", text: "Nie udało się pobrać." }),
+      el("span", { class: "file-error", text: t("Nie udało się pobrać.") }),
       el("button", {
         class: "button",
         type: "button",
-        text: "Pobierz ponownie",
+        text: t("Pobierz ponownie"),
         onclick: () => act("download", message.id),
       }),
     );
   } else {
-    box.append(el("span", { class: "file-meta", text: "Pobieranie…" }));
+    box.append(el("span", { class: "file-meta", text: t("Pobieranie…") }));
     if (file.transfer === "downloading" && file.size) {
       box.append(el("progress", { max: String(file.size), value: String(file.done) }));
     }
@@ -186,7 +186,7 @@ function fileCard(message, alias) {
   let meta = formatSize(file.size);
   if (file.transfer === "downloading") meta = `${formatSize(file.done)} z ${formatSize(file.size)}`;
   if (file.transfer === "saved") meta += ", zapisany";
-  if (file.transfer === "shared") meta += ", udostępniony z tego urządzenia";
+  if (file.transfer === "shared") meta += t(", udostępniony z tego urządzenia");
   card.append(el("span", { class: "file-meta", text: meta }));
 
   if (file.kind === "program" && !message.mine) {
@@ -194,7 +194,7 @@ function fileCard(message, alias) {
       el(
         "p",
         { class: "file-warning" },
-        `Program od: ${alias}. Uruchamiaj go tylko, jeśli wiesz, co to jest. Odcisk: `,
+        t("Program od: {alias}. Uruchamiaj go tylko, jeśli wiesz, co to jest. Odcisk: ", { alias }),
         el("span", { class: "fingerprint", text: fingerprint(file.hash) }),
       ),
     );
@@ -204,7 +204,7 @@ function fileCard(message, alias) {
     card.append(el("progress", { max: String(file.size || 1), value: String(file.done) }));
   }
   if (file.transfer === "failed" && file.reason) {
-    card.append(el("p", { class: "file-error", text: `Pobieranie przerwane: ${friendly(file.reason)}` }));
+    card.append(el("p", { class: "file-error", text: t("Pobieranie przerwane: {reason}", { reason: friendly(file.reason) }) }));
   }
 
   const local = file.path && (file.transfer === "saved" || file.transfer === "shared");
@@ -218,16 +218,16 @@ function fileCard(message, alias) {
       el("button", {
         class: "button primary",
         type: "button",
-        text: file.transfer === "failed" ? "Wznów pobieranie" : "Pobierz",
+        text: file.transfer === "failed" ? t("Wznów pobieranie") : t("Pobierz"),
         onclick: () => act("download", message.id),
       }),
     );
   }
   if (local) {
     if (file.kind !== "program") {
-      actions.append(el("button", { class: "button", type: "button", text: "Otwórz", onclick: () => act("open_file", message.id) }));
+      actions.append(el("button", { class: "button", type: "button", text: t("Otwórz"), onclick: () => act("open_file", message.id) }));
     }
-    actions.append(el("button", { class: "button", type: "button", text: "Pokaż w folderze", onclick: () => act("reveal", message.id) }));
+    actions.append(el("button", { class: "button", type: "button", text: t("Pokaż w folderze"), onclick: () => act("reveal", message.id) }));
   }
   if (actions.childElementCount) card.append(actions);
   return card;
@@ -238,8 +238,8 @@ function showProblem(text) {
   $("problem").hidden = !text;
 }
 
-const timeFormat = new Intl.DateTimeFormat("pl-PL", { hour: "2-digit", minute: "2-digit" });
-const dayFormat = new Intl.DateTimeFormat("pl-PL", { weekday: "long", day: "numeric", month: "long" });
+const timeFormat = new Intl.DateTimeFormat(LOCALE, { hour: "2-digit", minute: "2-digit" });
+const dayFormat = new Intl.DateTimeFormat(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 
 async function refresh() {
   let data;
@@ -259,15 +259,17 @@ async function refresh() {
     $("avatar").textContent = [...data.alias][0] || "#";
     $("avatar").classList.add("group-avatar");
     const online = data.members.filter((member) => member.online).length;
-    $("presence").textContent = `${data.members.length} osób, połączonych: ${online}`;
+    $("presence").textContent = t("{members} osób, połączonych: {online}", { members: data.members.length, online });
     $("members-open").hidden = false;
   } else {
     fillAvatar($("avatar"), data.alias, data.avatar);
     $("presence").textContent = data.online
-      ? "Połączony"
-      : "Niepołączony. Wiadomości wyjdą, gdy kontakt się pojawi.";
+      ? t("Połączony")
+      : t("Niepołączony. Wiadomości wyjdą, gdy kontakt się pojawi.");
   }
   $("avatar").dataset.online = String(data.online);
+  // Paying needs both wallets on; groups never pay.
+  $("pay").hidden = data.group || !data.wallet || !data.my_wallet;
   renderMessages(data.messages, data.alias);
 }
 
@@ -276,9 +278,9 @@ let chatData = null;
 // Who someone is in this conversation.
 function personName(id) {
   if (!chatData) return "";
-  if (id === chatData.my_id) return "Ty";
+  if (id === chatData.my_id) return t("Ty");
   if (!chatData.group) return chatData.alias;
-  return chatData.members.find((member) => member.id === id)?.name ?? "Ktoś spoza grupy";
+  return chatData.members.find((member) => member.id === id)?.name ?? t("Ktoś spoza grupy");
 }
 
 function authorAvatar(id) {
@@ -319,8 +321,8 @@ function reactionRow(message) {
   const add = el("button", {
     class: "react-add",
     type: "button",
-    title: "Zareaguj",
-    "aria-label": "Zareaguj na wiadomość",
+    title: t("Zareaguj"),
+    "aria-label": t("Zareaguj na wiadomość"),
     text: "＋",
     onclick: (event) => {
       event.stopPropagation();
@@ -387,7 +389,7 @@ function stickerContent(message) {
   const key = `sticker:${message.id}`;
   let node = mediaCache.get(key);
   if (!node) {
-    const label = `Naklejka: ${stickerCaption(message.sticker)}`;
+    const label = t("Naklejka: {caption}", { caption: stickerCaption(message.sticker) });
     node = el(
       "figure",
       { class: "sticker" },
@@ -412,7 +414,7 @@ function renderMessages(messages, alias) {
     if (day !== lastDay) {
       lastDay = day;
       const today = new Date().toDateString() === day;
-      nodes.push(el("p", { class: "day", text: today ? "Dzisiaj" : dayFormat.format(when) }));
+      nodes.push(el("p", { class: "day", text: today ? t("Dzisiaj") : dayFormat.format(when) }));
     }
     const fresh = !firstRender && !shown.has(message.id);
     shown.add(message.id);
@@ -422,6 +424,7 @@ function renderMessages(messages, alias) {
     }
     const classes = ["bubble", message.mine ? "mine" : "theirs"];
     if (message.sticker) classes.push("sticker-bubble");
+    if (message.payment) classes.push("payment-bubble");
     if (!message.file && onlyEmoji(message.body)) classes.push("big-emoji");
     if (message.file?.media) classes.push(`media-${message.file.media}`);
     if (fresh) classes.push("fresh");
@@ -442,6 +445,8 @@ function renderMessages(messages, alias) {
     }
     const content = message.sticker
       ? stickerContent(message)
+      : message.payment
+        ? paymentContent(message)
       : message.file?.media
         ? mediaContent(message)
         : message.file
@@ -459,12 +464,110 @@ function renderMessages(messages, alias) {
   });
 
   if (messages.length === 0) {
-    nodes.push(el("p", { class: "empty", text: "Napisz pierwszą wiadomość albo przeciągnij tu pliki. Rozmowa trwa, dopóki Szept jest otwarty." }));
+    nodes.push(el("p", { class: "empty", text: t("Napisz pierwszą wiadomość albo przeciągnij tu pliki. Rozmowa trwa, dopóki Szept jest otwarty.") }));
   }
   box.replaceChildren(...nodes);
   if (firstRender || nearBottom) box.scrollTop = box.scrollHeight;
   firstRender = false;
 }
+
+// Nano payments
+const PAYMENT_STATUS = {
+  sent: [t("Wysłano z Twojego portfela"), "ok"],
+  checking: [t("Sprawdzam w sieci Nano…"), "wait"],
+  pending: [t("Wysłane, czeka na potwierdzenie sieci"), "wait"],
+  confirmed: [t("Potwierdzone w sieci Nano"), "ok"],
+  invalid: [t("Sieć Nano nie zna takiego przelewu do Ciebie. Nie ufaj tej wiadomości."), "bad"],
+  unverified: [t("Nie udało się sprawdzić w sieci Nano"), "wait"],
+  "no-wallet": [t("Twój portfel jest wyłączony: włącz go, żeby sprawdzić i odebrać"), "wait"],
+};
+
+function paymentContent(message) {
+  const payment = message.payment;
+  const [label, tone] = PAYMENT_STATUS[payment.status] || PAYMENT_STATUS.unverified;
+  const copy = el("button", {
+    class: "link-button",
+    type: "button",
+    title: payment.block,
+    text: t("Blok {block}…", { block: payment.block.slice(0, 8) }),
+    "aria-label": t("Kopiuj hash bloku"),
+    onclick: () => navigator.clipboard.writeText(payment.block).catch(() => {}),
+  });
+  return el(
+    "div",
+    { class: "payment" },
+    el("span", { class: "payment-amount", text: `Ӿ ${payment.amount} XNO` }),
+    el("span", { class: `payment-status ${tone}`, text: label }),
+    copy,
+  );
+}
+
+let payReady = null;
+
+function resetPay() {
+  payReady = null;
+  $("pay-fields").hidden = false;
+  $("pay-summary").hidden = true;
+  $("pay-progress").hidden = true;
+  $("pay-error").hidden = true;
+  $("pay-confirm").textContent = t("Dalej");
+  $("pay-confirm").disabled = false;
+}
+
+$("pay").addEventListener("click", () => {
+  if (!chatData?.wallet) return;
+  resetPay();
+  const address = chatData.wallet;
+  $("pay-to").textContent = `Do: ${chatData.alias} (${address.slice(0, 11)}…${address.slice(-6)})`;
+  $("pay-amount").value = "";
+  $("pay-dialog").showModal();
+});
+
+function setPayError(text) {
+  $("pay-error").textContent = text;
+  $("pay-error").hidden = !text;
+}
+
+$("pay-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setPayError("");
+  if (!payReady) {
+    try {
+      const amount = await invoke("check_nano_amount", { text: $("pay-amount").value });
+      payReady = { amount, address: chatData.wallet };
+      $("pay-fields").hidden = true;
+      $("pay-summary").hidden = false;
+      $("pay-summary").replaceChildren(
+        el("strong", { text: t("Wysłać {amount} XNO do {alias}?", { amount, alias: chatData.alias }) }),
+        el("span", { class: "identifier", text: chatData.wallet }),
+        el("span", { text: t("Przelewu nie da się cofnąć.") }),
+      );
+      $("pay-confirm").textContent = t("Wyślij {amount} XNO", { amount });
+    } catch (err) {
+      setPayError(friendly(err));
+    }
+    return;
+  }
+  // The address could have changed while the dialog was open.
+  if (chatData.wallet !== payReady.address) {
+    resetPay();
+    setPayError(t("Kontakt zmienił adres portfela. Sprawdź kwotę i spróbuj jeszcze raz."));
+    return;
+  }
+  $("pay-confirm").disabled = true;
+  $("pay-progress").hidden = false;
+  $("pay-progress").textContent = t("Wysyłam… Dowód pracy sieci Nano może liczyć się do minuty.");
+  try {
+    await invoke("send_nano", { peer, amount: payReady.amount });
+    $("pay-dialog").close();
+  } catch (err) {
+    setPayError(friendly(err));
+    $("pay-confirm").disabled = false;
+    $("pay-progress").hidden = true;
+  }
+});
+
+listen("wallet", () => refresh());
 
 // Stickers
 const stickerPanel = $("sticker-panel");
@@ -477,7 +580,7 @@ $("sticker-grid").append(
         class: "sticker-choice",
         type: "button",
         title: stickerCaption(code),
-        "aria-label": `Wyślij naklejkę: ${stickerCaption(code)}`,
+        "aria-label": t("Wyślij naklejkę: {caption}", { caption: stickerCaption(code) }),
         onclick: () => sendSticker(code),
       },
       figureSvg(code, 64),
@@ -525,10 +628,10 @@ $("members-open").addEventListener("click", async () => {
   $("group-name").value = chatData.alias;
   $("group-name").readOnly = !owner;
   $("members-save").hidden = !owner;
-  $("leave-group").textContent = owner ? "Zamknij grupę" : "Opuść grupę";
+  $("leave-group").textContent = owner ? t("Zamknij grupę") : t("Opuść grupę");
   $("members-hint").textContent = owner
-    ? "Możesz dodać swoje kontakty albo odznaczyć osoby, które mają wyjść z grupy."
-    : "Członków zmienia właściciel grupy.";
+    ? t("Możesz dodać swoje kontakty albo odznaczyć osoby, które mają wyjść z grupy.")
+    : t("Członków zmienia właściciel grupy.");
   let contacts = [];
   if (owner) {
     try {
@@ -546,7 +649,7 @@ $("members-open").addEventListener("click", async () => {
     }
   }
   $("member-list").replaceChildren(
-    el("p", { class: "member-me", text: owner ? "Ty (właściciel)" : "Ty" }),
+    el("p", { class: "member-me", text: owner ? t("Ty (właściciel)") : t("Ty") }),
     ...rows.map((row) =>
       owner
         ? el(
@@ -575,8 +678,8 @@ $("members-form").addEventListener("submit", async (event) => {
 
 $("leave-group").addEventListener("click", async () => {
   const question = chatData?.mine
-    ? "Zamknąć grupę dla wszystkich? Rozmowa zniknie."
-    : "Opuścić grupę? Rozmowa zniknie z tego komputera.";
+    ? t("Zamknąć grupę dla wszystkich? Rozmowa zniknie.")
+    : t("Opuścić grupę? Rozmowa zniknie z tego komputera.");
   if (!confirm(question)) return;
   try {
     await invoke("leave_group", { group: peer });
@@ -592,6 +695,7 @@ listen("changed", (event) => {
   if (change.peer && change.peer !== peer) return;
   if (document.hasFocus()) {
     if (change.kind === "incoming") sounds.incoming();
+    if (change.kind === "payment") sounds.payment();
     if (change.kind === "sent" || change.kind === "saved") sounds.sent();
   }
   if (pending) return;
@@ -655,7 +759,7 @@ let activeTab = 0;
 
 function categories() {
   const recent = recentEmoji();
-  const list = recent.length ? [{ name: "Ostatnio używane", icon: "🕘", items: recent }] : [];
+  const list = recent.length ? [{ name: t("Ostatnio używane"), icon: "🕘", items: recent }] : [];
   return list.concat(EMOJI.map((group) => ({ ...group, items: group.list.split(" ") })));
 }
 
@@ -715,9 +819,9 @@ document.addEventListener("click", (event) => {
 // The system's own picker works in the message field too.
 const platform = navigator.userAgent;
 const shortcut = /Windows/.test(platform)
-  ? "Win + . otwiera systemowy wybór emoji i GIF-ów."
+  ? t("Win + . otwiera systemowy wybór emoji i GIF-ów.")
   : /Mac OS X|Macintosh/.test(platform)
-    ? "Ctrl + Cmd + Spacja otwiera systemowy wybór emoji."
+    ? t("Ctrl + Cmd + Spacja otwiera systemowy wybór emoji.")
     : "";
 if (shortcut) {
   $("emoji-hint").textContent = shortcut;
@@ -737,7 +841,7 @@ draft.addEventListener("paste", (event) => {
 
 async function sendGif(picture) {
   if (picture.size > MAX_MEDIA_SIZE) {
-    showProblem("Ten obraz jest za duży na GIF. Wyślij go spinaczem.");
+    showProblem(t("Ten obraz jest za duży na GIF. Wyślij go spinaczem."));
     return;
   }
   try {
@@ -779,7 +883,7 @@ async function startRecording() {
   showProblem("");
   const type = voiceType();
   if (type === null || !navigator.mediaDevices?.getUserMedia) {
-    showProblem("Ten system nie pozwala tu nagrywać dźwięku.");
+    showProblem(t("Ten system nie pozwala tu nagrywać dźwięku."));
     return;
   }
   let stream;
@@ -790,8 +894,8 @@ async function startRecording() {
     });
   } catch (err) {
     showProblem(err?.name === "NotFoundError"
-      ? "Nie znaleziono mikrofonu."
-      : "Brak dostępu do mikrofonu. Zezwól na niego w ustawieniach systemu.");
+      ? t("Nie znaleziono mikrofonu.")
+      : t("Brak dostępu do mikrofonu. Zezwól na niego w ustawieniach systemu."));
     return;
   }
   let recorder;
@@ -799,7 +903,7 @@ async function startRecording() {
     recorder = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 32000 } : {});
   } catch {
     for (const track of stream.getTracks()) track.stop();
-    showProblem("Ten system nie pozwala tu nagrywać dźwięku.");
+    showProblem(t("Ten system nie pozwala tu nagrywać dźwięku."));
     return;
   }
   const chunks = [];
@@ -842,7 +946,7 @@ async function finishRecording() {
   const mime = recorder.mimeType || chunks[0].type || "";
   const blob = new Blob(chunks, { type: mime });
   if (blob.size > MAX_MEDIA_SIZE) {
-    showProblem("Nagranie jest za długie.");
+    showProblem(t("Nagranie jest za długie."));
     return;
   }
   try {

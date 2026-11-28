@@ -105,7 +105,7 @@ fun MessageField(
         modifier = modifier,
         factory = { context ->
             RichEditText(context).apply {
-                hint = "Wiadomość"
+                hint = t("Wiadomość")
                 inputType = InputType.TYPE_CLASS_TEXT or
                     InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                     InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -294,25 +294,25 @@ fun MediaContent(file: FileItem, onRetry: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                if (file.media == "voice") "Wiadomość głosowa, ${formatDuration(file.durationMs)}" else "GIF",
+                if (file.media == "voice") t("Wiadomość głosowa, {duration}", "duration" to formatDuration(file.durationMs)) else "GIF",
                 style = MaterialTheme.typography.bodyMedium,
             )
             if (file.transfer == Transfer.ARCHIVED) {
                 Text(
-                    "Z archiwum, bez zawartości.",
+                    t("Z archiwum, bez zawartości."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else if (file.transfer == Transfer.FAILED) {
                 Text(
-                    "Nie udało się pobrać. Nadawca musi mieć Szept włączony.",
+                    t("Nie udało się pobrać. Nadawca musi mieć Szept włączony."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
-                Button(onClick = onRetry) { Text("Pobierz ponownie") }
+                Button(onClick = onRetry) { Text(t("Pobierz ponownie")) }
             } else {
                 Text(
-                    "Pobieranie…",
+                    t("Pobieranie…"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -352,7 +352,7 @@ private fun VoiceMessage(path: String, durationMs: Long) {
             color = colors.primary,
             modifier = Modifier
                 .size(40.dp)
-                .semantics { contentDescription = if (playing) "Pauza" else "Odtwórz" },
+                .semantics { contentDescription = if (playing) t("Pauza") else t("Odtwórz") },
         ) {
             Canvas(modifier = Modifier.size(40.dp)) {
                 val c = size.minDimension
@@ -379,7 +379,7 @@ private fun VoiceMessage(path: String, durationMs: Long) {
                     VoicePlayback.seek(path, position)
                 }
             },
-            modifier = Modifier.weight(1f).semantics { contentDescription = "Postęp nagrania" },
+            modifier = Modifier.weight(1f).semantics { contentDescription = t("Postęp nagrania") },
             colors = SliderDefaults.colors(thumbColor = colors.primary, activeTrackColor = colors.primary),
         )
         Text(

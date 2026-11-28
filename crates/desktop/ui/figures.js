@@ -110,9 +110,9 @@ function figureSvg(id, size, { animate = true, label = null } = {}) {
 }
 
 function figureName(id) {
-  return FIGURES[id]?.name ?? id;
+  return FIGURES[id] ? t(FIGURES[id].name) : id;
 }
 
 function stickerCaption(id) {
-  return FIGURES[id]?.caption ?? "";
+  return FIGURES[id] ? t(FIGURES[id].caption) : "";
 }

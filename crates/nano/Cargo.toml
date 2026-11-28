@@ -1,0 +1,34 @@
+[package]
+name = "komunikator-nano"
+description = "Portfel Nano (XNO) dla Szeptu: seed, adresy, bloki, proof-of-work i RPC."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# The 24 words: BIP39 with the Nano seed as entropy, as in Nault and Natrium.
+bip39 = "3"
+blake2 = "0.11"
+# Nano signs with Ed25519 over Blake2b-512 instead of SHA-512; the hazmat
+# functions take the hash as a parameter.
+ed25519-dalek = { version = "3", features = ["hazmat"] }
+rand.workspace = true
+# Already in the tree through iroh. TLS comes from the same aws-lc-rs
+# provider the rest of Szept uses, roots from webpki-roots: nothing depends on
+# the platform verifier, which needs extra setup on Android.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+webpki-roots = "1"
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

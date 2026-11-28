@@ -43,7 +43,8 @@ use crate::{
 const MAGIC: &[u8; 15] = b"SZEPT-ARCHIWUM\x00";
 const FORMAT_V1: u8 = 1;
 const FORMAT_V2: u8 = 2;
-const VERSION: u32 = 2;
+/// Version 3 added the Nano wallet seed.
+const VERSION: u32 = 3;
 
 /// Argon2id for new archives: 128 MiB, three passes, one lane.
 const MEMORY_KIB: u32 = 128 * 1024;
@@ -114,9 +115,13 @@ pub struct ImportedArchive {
     /// The person's preferences and look (theme, brightness, text size…),
     /// for the app to apply. Empty for archives from older versions.
     pub preferences: HashMap<String, String>,
+    /// The archive held a Nano wallet seed and it is on this device now
+    /// (any other seed that was here is kept aside, never deleted).
+    pub wallet_restored: bool,
 }
 
-/// The content of a version 2 archive.
+/// The content of a version 3 archive. New fields go at the end, and the
+/// version goes up: the format has no field names.
 #[derive(Serialize, Deserialize)]
 struct Archive {
     version: u32,
@@ -132,6 +137,45 @@ struct Archive {
     /// Voice messages and GIFs: message id, file name, content.
     blobs: Vec<(String, String, Vec<u8>)>,
     preferences: Vec<(String, String)>,
+    /// The Nano wallet seed.
+    wallet: Option<[u8; 32]>,
+}
+
+/// The content of a version 2 archive.
+#[derive(Serialize, Deserialize)]
+struct ArchiveV2 {
+    version: u32,
+    created_ms: u64,
+    identity: Option<[u8; 32]>,
+    my_name: String,
+    my_avatar: Vec<u8>,
+    contacts: Vec<(String, [u8; 32])>,
+    groups: Vec<GroupInfo>,
+    names: Vec<(String, String)>,
+    avatars: Vec<(String, Vec<u8>)>,
+    conversations: Vec<ArchivedConversation>,
+    blobs: Vec<(String, String, Vec<u8>)>,
+    preferences: Vec<(String, String)>,
+}
+
+impl From<ArchiveV2> for Archive {
+    fn from(old: ArchiveV2) -> Self {
+        Self {
+            version: old.version,
+            created_ms: old.created_ms,
+            identity: old.identity,
+            my_name: old.my_name,
+            my_avatar: old.my_avatar,
+            contacts: old.contacts,
+            groups: old.groups,
+            names: old.names,
+            avatars: old.avatars,
+            conversations: old.conversations,
+            blobs: old.blobs,
+            preferences: old.preferences,
+            wallet: None,
+        }
+    }
 }
 
 /// The content of a version 1 archive.
@@ -166,6 +210,7 @@ impl From<ArchiveV1> for Archive {
             conversations: old.conversations,
             blobs: old.blobs,
             preferences: Vec::new(),
+            wallet: None,
         }
     }
 }
@@ -173,6 +218,7 @@ impl From<ArchiveV1> for Archive {
 pub(crate) fn export(
     shared: &Shared,
     identity: Option<[u8; 32]>,
+    wallet: Option<[u8; 32]>,
     path: &Path,
     password: &str,
     mut conversations: Vec<ArchivedConversation>,
@@ -254,6 +300,7 @@ pub(crate) fn export(
         conversations,
         blobs,
         preferences,
+        wallet,
     };
     let plain = Zeroizing::new(postcard::to_stdvec(&archive).context("cannot pack the archive")?);
     drop(archive);
@@ -280,7 +327,15 @@ pub(crate) fn import(
             .context("the archive is damaged")?
             .into()
     } else {
-        postcard::from_bytes(&plain).context("the archive is damaged")?
+        let (version, _) =
+            postcard::take_from_bytes::<u32>(&plain).context("the archive is damaged")?;
+        if version <= 2 {
+            postcard::from_bytes::<ArchiveV2>(&plain)
+                .context("the archive is damaged")?
+                .into()
+        } else {
+            postcard::from_bytes(&plain).context("the archive is damaged")?
+        }
     };
     drop(plain);
     ensure!(
@@ -295,6 +350,19 @@ pub(crate) fn import(
             true
         }
         _ => false,
+    };
+    // The wallet comes back on; a different seed here is moved aside.
+    let wallet_restored = match archive.wallet {
+        Some(bytes) => {
+            let seed = Zeroizing::new(bytes);
+            crate::wallet::store_seed(data_dir, &komunikator_nano::Seed::from_bytes(*seed))?;
+            let mut settings = crate::wallet::load_settings(data_dir);
+            settings.enabled = true;
+            settings.backed_up = true;
+            crate::wallet::save_settings(data_dir, &settings)?;
+            true
+        }
+        None => false,
     };
     let me = if Identity::exists(&identity_path) {
         Some(Identity::load(&identity_path)?.id())
@@ -401,6 +469,7 @@ pub(crate) fn import(
         preferences: clean_preferences(archive.preferences.into_iter().collect())
             .into_iter()
             .collect(),
+        wallet_restored,
     })
 }
 

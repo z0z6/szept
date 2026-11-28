@@ -4,6 +4,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod i18n;
+mod i18n_data;
+mod notify;
 mod store;
 
 use std::{
@@ -25,10 +28,9 @@ use tauri::{
     ipc::{InvokeBody, Request},
 };
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::store::{FileInfo, Message, Status, Store, Transfer};
+use crate::store::{FileInfo, Message, PaymentInfo, Status, Store, Transfer};
 
 /// Everything the commands share.
 struct Shared {
@@ -39,6 +41,8 @@ struct Shared {
     /// closes: the contact fetches them from this folder.
     outgoing: PathBuf,
     data_dir: PathBuf,
+    /// How notifications look and sound.
+    notify: Mutex<notify::Settings>,
 }
 
 impl Shared {
@@ -114,6 +118,10 @@ struct ChatView {
     mine: bool,
     members: Vec<Person>,
     messages: Vec<Message>,
+    /// The contact's Nano address, when their wallet is on.
+    wallet: Option<String>,
+    /// Our own wallet is on.
+    my_wallet: bool,
 }
 
 /// What a window needs to redraw after something changed for `peer`.
@@ -194,7 +202,7 @@ fn person_name(core: &App, id: &str, roster: Option<&Group>) -> String {
         .and_then(|group| group.members.iter().find(|member| member.id == id))
         .map(|member| member.name.clone())
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| format!("Ktoś ({}…)", &id[..id.len().min(6)]))
+        .unwrap_or_else(|| i18n::tf("Ktoś ({id}…)", &[("id", &id[..id.len().min(6)])]))
 }
 
 fn find_group(core: &App, id: &str) -> Option<Group> {
@@ -260,8 +268,9 @@ fn update_contact_key(
     shared.store.lock().unwrap().migrate(
         &old,
         &id,
-        "🔑 Kontakt ma nowy klucz. Wcześniejsza rozmowa zakończyła się tutaj, nowa toczy się poniżej."
-            .into(),
+        i18n::t(
+            "🔑 Kontakt ma nowy klucz. Wcześniejsza rozmowa zakończyła się tutaj, nowa toczy się poniżej.",
+        ),
     );
     if let Some(window) = app.get_webview_window(&chat_label(&old)) {
         let _ = window.close();
@@ -342,9 +351,9 @@ async fn export_archive(
     let picked = app
         .dialog()
         .file()
-        .set_title("Zapisz archiwum Szeptu")
+        .set_title(i18n::t("Zapisz archiwum Szeptu"))
         .set_file_name(format!("szept-archiwum-{stamp}.szept"))
-        .add_filter("Archiwum Szeptu", &["szept"])
+        .add_filter(i18n::t("Archiwum Szeptu"), &["szept"])
         .blocking_save_file();
     let Some(path) = picked.and_then(|file| file.into_path().ok()) else {
         return Ok(false);
@@ -383,14 +392,14 @@ const MAX_SETTINGS_FILE: u64 = 64 * 1024;
 #[tauri::command]
 async fn save_settings_file(app: AppHandle, json: String) -> CommandResult<bool> {
     if json.len() as u64 > MAX_SETTINGS_FILE {
-        return Err("Za dużo ustawień.".into());
+        return Err(i18n::t("Za dużo ustawień."));
     }
     let picked = app
         .dialog()
         .file()
-        .set_title("Zapisz ustawienia Szeptu")
+        .set_title(i18n::t("Zapisz ustawienia Szeptu"))
         .set_file_name("szept-ustawienia.json")
-        .add_filter("Ustawienia Szeptu", &["json"])
+        .add_filter(i18n::t("Ustawienia Szeptu"), &["json"])
         .blocking_save_file();
     let Some(path) = picked.and_then(|file| file.into_path().ok()) else {
         return Ok(false);
@@ -405,8 +414,8 @@ async fn load_settings_file(app: AppHandle) -> CommandResult<Option<String>> {
     let picked = app
         .dialog()
         .file()
-        .set_title("Wczytaj ustawienia Szeptu")
-        .add_filter("Ustawienia Szeptu", &["json"])
+        .set_title(i18n::t("Wczytaj ustawienia Szeptu"))
+        .add_filter(i18n::t("Ustawienia Szeptu"), &["json"])
         .blocking_pick_file();
     let Some(path) = picked.and_then(|file| file.into_path().ok()) else {
         return Ok(None);
@@ -415,17 +424,18 @@ async fn load_settings_file(app: AppHandle) -> CommandResult<Option<String>> {
         .map_err(|err| err.to_string())?
         .len();
     if size > MAX_SETTINGS_FILE {
-        return Err("To nie jest plik ustawień Szeptu.".into());
+        return Err(i18n::t("To nie jest plik ustawień Szeptu."));
     }
     std::fs::read_to_string(&path)
         .map(Some)
-        .map_err(|_| "To nie jest plik ustawień Szeptu.".into())
+        .map_err(|_| i18n::t("To nie jest plik ustawień Szeptu."))
 }
 
 /// What an import brought back, for the window to report.
 #[derive(Serialize)]
 struct ImportReport {
     identity_restored: bool,
+    wallet_restored: bool,
     had_identity: bool,
     contacts_added: u32,
     groups_added: u32,
@@ -444,8 +454,8 @@ async fn import_archive_file(
     let picked = app
         .dialog()
         .file()
-        .set_title("Wybierz archiwum Szeptu")
-        .add_filter("Archiwum Szeptu", &["szept"])
+        .set_title(i18n::t("Wybierz archiwum Szeptu"))
+        .add_filter(i18n::t("Archiwum Szeptu"), &["szept"])
         .blocking_pick_file();
     let Some(path) = picked.and_then(|file| file.into_path().ok()) else {
         return Ok(None);
@@ -468,6 +478,7 @@ async fn import_archive_file(
     let imported = imported.map_err(failed)?;
     let report = ImportReport {
         identity_restored: imported.identity_restored,
+        wallet_restored: imported.wallet_restored,
         had_identity: imported.had_identity,
         contacts_added: imported.contacts_added,
         groups_added: imported.groups_added,
@@ -559,7 +570,7 @@ fn remove_contact(app: AppHandle, shared: State<'_, Shared>, alias: String) -> C
 /// existing one to the front.
 #[tauri::command]
 fn open_chat(app: AppHandle, shared: State<'_, Shared>, peer: String) -> CommandResult<()> {
-    let alias = title_of(&shared, &peer).ok_or("nieznana rozmowa")?;
+    let alias = title_of(&shared, &peer).ok_or_else(|| i18n::t("Nieznana rozmowa."))?;
     let label = chat_label(&peer);
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();
@@ -583,7 +594,8 @@ fn chat(shared: State<'_, Shared>, peer: String) -> CommandResult<ChatView> {
     let core = shared.core();
     let messages = shared.store.lock().unwrap().conversation(&peer);
     if is_group(&peer) {
-        let group = find_group(&core, &peer).ok_or("nie jesteś już w tej grupie")?;
+        let group =
+            find_group(&core, &peer).ok_or_else(|| i18n::t("Nie jesteś już w tej grupie."))?;
         let contacts: Vec<String> = core
             .contacts()
             .into_iter()
@@ -595,7 +607,7 @@ fn chat(shared: State<'_, Shared>, peer: String) -> CommandResult<ChatView> {
             .iter()
             .map(|member| Person {
                 name: if member.id == my_id {
-                    "Ty".into()
+                    i18n::t("Ty")
                 } else {
                     person_name(&core, &member.id, Some(&group))
                 },
@@ -620,9 +632,12 @@ fn chat(shared: State<'_, Shared>, peer: String) -> CommandResult<ChatView> {
             mine: group.mine,
             members,
             messages,
+            wallet: None,
+            my_wallet: false,
         });
     }
-    let alias = alias_of(&shared, &peer).ok_or("ten kontakt został usunięty")?;
+    let alias = alias_of(&shared, &peer).ok_or_else(|| i18n::t("Ten kontakt został usunięty."))?;
+    let wallet = core.contact_wallet(peer.clone());
     Ok(ChatView {
         online: core.is_online(peer.clone()),
         avatar: data_url(core.avatar(peer.clone())),
@@ -633,6 +648,8 @@ fn chat(shared: State<'_, Shared>, peer: String) -> CommandResult<ChatView> {
         mine: false,
         members: Vec::new(),
         messages,
+        wallet,
+        my_wallet: core.wallet_status().enabled,
     })
 }
 
@@ -674,7 +691,7 @@ async fn send_files(app: AppHandle, peer: String) -> CommandResult<()> {
     let picked = app
         .dialog()
         .file()
-        .set_title("Wybierz pliki do wysłania")
+        .set_title(i18n::t("Wybierz pliki do wysłania"))
         .blocking_pick_files();
     let paths: Vec<PathBuf> = picked
         .unwrap_or_default()
@@ -736,8 +753,14 @@ fn offer_path(app: &AppHandle, peer: &str, path: &Path, media: Option<Media>) {
                 |name| name.to_string_lossy().into_owned(),
             );
             let text = match media {
-                Some(Media::Voice { .. }) => format!("Nie udało się wysłać nagrania: {err}"),
-                _ => format!("Nie udało się wysłać {name}: {err}"),
+                Some(Media::Voice { .. }) => i18n::tf(
+                    "Nie udało się wysłać nagrania: {err}",
+                    &[("err", &err.to_string())],
+                ),
+                _ => i18n::tf(
+                    "Nie udało się wysłać {name}: {err}",
+                    &[("name", &name), ("err", &err.to_string())],
+                ),
             };
             let _ = app.emit(
                 "problem",
@@ -770,7 +793,7 @@ fn send_media(
     request: Request<'_>,
 ) -> CommandResult<()> {
     let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("brak danych".into());
+        return Err(i18n::t("Brak danych."));
     };
     let header = |name: &str| {
         request
@@ -781,10 +804,10 @@ fn send_media(
             .to_owned()
     };
     let peer = header("peer");
-    title_of(&shared, &peer).ok_or("nieznana rozmowa")?;
+    title_of(&shared, &peer).ok_or_else(|| i18n::t("Nieznana rozmowa."))?;
     let extension = header("extension").to_ascii_lowercase();
     if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("nieznany typ pliku".into());
+        return Err(i18n::t("Nieznany typ pliku."));
     }
     let (media, stem) = match header("media").as_str() {
         "voice" => {
@@ -792,13 +815,15 @@ fn send_media(
             (Media::Voice { duration_ms }, "glosowa")
         }
         "gif" => (Media::Gif, "gif"),
-        _ => return Err("nieznany rodzaj wiadomości".into()),
+        _ => return Err(i18n::t("Nieznany rodzaj wiadomości.")),
     };
     if bytes.is_empty() {
-        return Err("Nagranie jest puste.".into());
+        return Err(i18n::t("Nagranie jest puste."));
     }
     if bytes.len() as u64 > max_media_size() {
-        return Err("Ten plik jest za duży na wiadomość. Wyślij go spinaczem.".into());
+        return Err(i18n::t(
+            "Ten plik jest za duży na wiadomość. Wyślij go spinaczem.",
+        ));
     }
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -859,7 +884,7 @@ fn open_file(
 ) -> CommandResult<()> {
     let file = local_file(&shared, &peer, &id)?;
     if file.kind == "program" {
-        return Err("Programy uruchamiaj świadomie, z folderu.".into());
+        return Err(i18n::t("Programy uruchamiaj świadomie, z folderu."));
     }
     app.opener()
         .open_path(file.path.unwrap_or_default(), None::<&str>)
@@ -886,10 +911,10 @@ fn local_file(shared: &Shared, peer: &str, id: &str) -> CommandResult<FileInfo> 
         .lock()
         .unwrap()
         .file(peer, id)
-        .ok_or("nie ma takiego pliku")?;
+        .ok_or_else(|| i18n::t("Nie ma takiego pliku."))?;
     match &file.path {
         Some(path) if Path::new(path).exists() => Ok(file),
-        _ => Err("Tego pliku nie ma już na dysku.".into()),
+        _ => Err(i18n::t("Tego pliku nie ma już na dysku.")),
     }
 }
 
@@ -903,10 +928,237 @@ fn downloads_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(base.join("Szept"))
 }
 
+/// The Nano wallet as the windows show it.
+#[derive(Serialize)]
+struct WalletView {
+    exists: bool,
+    enabled: bool,
+    backed_up: bool,
+    address: Option<String>,
+    /// `nano:<address>`, for other wallets and QR codes.
+    link: Option<String>,
+    qr_svg: Option<String>,
+    nodes: Vec<String>,
+    default_nodes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct BalanceView {
+    balance: String,
+    receivable: String,
+}
+
+fn wallet_view(core: &App) -> CommandResult<WalletView> {
+    let status = core.wallet_status();
+    let link = match &status.address {
+        Some(address) => Some(komunikator_ffi::nano_link(address.clone(), None).map_err(failed)?),
+        None => None,
+    };
+    let qr_svg = match &link {
+        Some(link) => Some(labeled_qr_svg(
+            link,
+            &i18n::t("Kod QR z Twoim adresem Nano"),
+        )?),
+        None => None,
+    };
+    Ok(WalletView {
+        exists: status.exists,
+        enabled: status.enabled,
+        backed_up: status.backed_up,
+        address: status.address,
+        link,
+        qr_svg,
+        nodes: status.nodes,
+        default_nodes: komunikator_ffi::default_nano_nodes(),
+    })
+}
+
+/// Tells every window the wallet may look different now.
+fn notify_wallet(app: &AppHandle) {
+    let _ = app.emit("wallet", ());
+}
+
+#[tauri::command]
+fn wallet(shared: State<'_, Shared>) -> CommandResult<WalletView> {
+    wallet_view(&shared.core())
+}
+
+/// Turns the wallet on, creating the seed the first time.
+#[tauri::command]
+fn wallet_create(app: AppHandle, shared: State<'_, Shared>) -> CommandResult<WalletView> {
+    let core = shared.core();
+    core.wallet_create().map_err(failed)?;
+    notify_wallet(&app);
+    wallet_view(&core)
+}
+
+#[tauri::command]
+fn wallet_words(shared: State<'_, Shared>) -> CommandResult<Vec<String>> {
+    shared.core().wallet_words().map_err(failed)
+}
+
+#[tauri::command]
+fn wallet_backup_quiz(shared: State<'_, Shared>) -> Vec<u32> {
+    shared.core().wallet_backup_quiz()
+}
+
+#[tauri::command]
+fn wallet_confirm_backup(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    positions: Vec<u32>,
+    words: Vec<String>,
+) -> CommandResult<bool> {
+    let ok = shared
+        .core()
+        .wallet_confirm_backup(positions, words)
+        .map_err(failed)?;
+    if ok {
+        notify_wallet(&app);
+    }
+    Ok(ok)
+}
+
+#[tauri::command]
+fn wallet_restore(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    backup: String,
+) -> CommandResult<WalletView> {
+    let core = shared.core();
+    core.wallet_restore(backup).map_err(failed)?;
+    notify_wallet(&app);
+    wallet_view(&core)
+}
+
+#[tauri::command]
+fn wallet_disable(app: AppHandle, shared: State<'_, Shared>) -> CommandResult<()> {
+    shared.core().wallet_disable().map_err(failed)?;
+    notify_wallet(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn wallet_set_nodes(
+    app: AppHandle,
+    shared: State<'_, Shared>,
+    nodes: Vec<String>,
+) -> CommandResult<()> {
+    shared.core().wallet_set_nodes(nodes).map_err(failed)?;
+    notify_wallet(&app);
+    Ok(())
+}
+
+/// Runs a slow wallet call away from the windows' threads.
+async fn blocking<T: Send + 'static>(
+    app: &AppHandle,
+    work: impl FnOnce(Arc<App>) -> Result<T, AppError> + Send + 'static,
+) -> CommandResult<T> {
+    let core = app.state::<Shared>().core();
+    tauri::async_runtime::spawn_blocking(move || work(core))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(failed)
+}
+
+#[tauri::command]
+async fn wallet_balance(app: AppHandle) -> CommandResult<BalanceView> {
+    let balance = blocking(&app, |core| core.wallet_balance()).await?;
+    Ok(BalanceView {
+        balance: balance.balance,
+        receivable: balance.receivable,
+    })
+}
+
+#[tauri::command]
+async fn wallet_receive(app: AppHandle) -> CommandResult<usize> {
+    let received = blocking(&app, |core| core.wallet_receive()).await?;
+    Ok(received.len())
+}
+
+/// Checks an amount typed in XNO and returns it as the app will send it.
+#[tauri::command]
+fn check_nano_amount(text: String) -> CommandResult<String> {
+    let raw = komunikator_ffi::parse_nano_amount(text).map_err(failed)?;
+    komunikator_ffi::format_nano_amount(raw).map_err(failed)
+}
+
+#[tauri::command]
+fn check_nano_address(text: String) -> CommandResult<String> {
+    komunikator_ffi::normalize_nano_address(text).map_err(failed)
+}
+
+/// Pays a contact and adds the payment to the conversation.
+#[tauri::command]
+async fn send_nano(app: AppHandle, peer: String, amount: String) -> CommandResult<()> {
+    let to = peer.clone();
+    let shared = app.state::<Shared>();
+    let sent = blocking(&app, move |core| core.send_nano(to, amount)).await?;
+    {
+        let mut store = shared.store.lock().unwrap();
+        let id = sent
+            .id
+            .clone()
+            .unwrap_or_else(|| format!("payment-{}", sent.block));
+        let mut message = Message::outgoing(id, String::new());
+        message.payment = Some(PaymentInfo {
+            block: sent.block,
+            amount: sent.amount,
+            amount_raw: sent.amount_raw,
+            status: "sent".into(),
+        });
+        store.push(&peer, message);
+    }
+    notify_changed(&app, peer, "sent");
+    notify_wallet(&app);
+    Ok(())
+}
+
+/// Pays any Nano address; returns the hash of the send block.
+#[tauri::command]
+async fn send_nano_to_address(
+    app: AppHandle,
+    address: String,
+    amount: String,
+) -> CommandResult<String> {
+    let sent = blocking(&app, move |core| core.send_nano_to_address(address, amount)).await?;
+    notify_wallet(&app);
+    Ok(sent.block)
+}
+
+/// The language the windows use, for the texts the Rust side shows.
+#[tauri::command]
+fn set_language(shared: State<'_, Shared>, language: String) -> CommandResult<()> {
+    i18n::save(&shared.data_dir, &language).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn notify_settings(shared: State<'_, Shared>) -> notify::Settings {
+    shared.notify.lock().unwrap().clone()
+}
+
+/// Whether notifications show a preview, and the sound for new messages.
+#[tauri::command]
+fn set_notify_settings(
+    shared: State<'_, Shared>,
+    preview: bool,
+    sound: String,
+) -> CommandResult<()> {
+    let ok =
+        sound == "none" || (sound.len() <= 16 && sound.bytes().all(|b| b.is_ascii_lowercase()));
+    if !ok {
+        return Err(i18n::t("Nieznany dźwięk."));
+    }
+    let settings = notify::Settings { preview, sound };
+    notify::save(&shared.data_dir, &settings).map_err(|err| err.to_string())?;
+    *shared.notify.lock().unwrap() = settings;
+    Ok(())
+}
+
 /// Turns pasted or scanned text into an identifier, or explains why not.
 #[tauri::command]
 fn normalize_id(text: String) -> CommandResult<String> {
-    komunikator_ffi::normalize_id(text).map_err(|_| "to nie jest identyfikator Szeptu".into())
+    komunikator_ffi::normalize_id(text).map_err(|_| i18n::t("To nie jest identyfikator Szeptu."))
 }
 
 /// Receives core events on a background thread and updates the windows.
@@ -1013,11 +1265,11 @@ impl EventListener for Listener {
             }
             ChatEvent::GroupClosed { group, reason } => {
                 let text = if reason == "removed" {
-                    "Właściciel usunął Cię z tej grupy."
+                    i18n::t("Właściciel usunął Cię z tej grupy.")
                 } else {
-                    "Właściciel zamknął tę grupę."
+                    i18n::t("Właściciel zamknął tę grupę.")
                 };
-                shared.store.lock().unwrap().note(&group, text.into());
+                shared.store.lock().unwrap().note(&group, text);
                 if let Some(window) = self.app.get_webview_window(&chat_label(&group)) {
                     let _ = window.close();
                 }
@@ -1083,6 +1335,63 @@ impl EventListener for Listener {
                     notify_changed(&self.app, key, "sent");
                 }
             }
+            ChatEvent::ContactWalletChanged { peer } => {
+                notify_changed(&self.app, peer, "other");
+                notify_wallet(&self.app);
+            }
+            ChatEvent::Payment {
+                peer,
+                id,
+                sent_at_ms,
+                block,
+                amount_raw,
+                amount,
+            } => {
+                let message = Message {
+                    payment: Some(PaymentInfo {
+                        block,
+                        amount,
+                        amount_raw,
+                        status: "checking".into(),
+                    }),
+                    ..Message::incoming(id, None, sent_at_ms)
+                };
+                self.incoming(peer, message);
+            }
+            ChatEvent::PaymentChecked { peer, id, status } => {
+                if shared
+                    .store
+                    .lock()
+                    .unwrap()
+                    .update_payment(&peer, &id, &status)
+                {
+                    notify_changed(&self.app, peer, "other");
+                }
+            }
+            ChatEvent::NanoReceived { payment } => {
+                // A contact's payment already showed up in their conversation.
+                if payment.peer.is_none() {
+                    let preview = shared.notify.lock().unwrap().preview;
+                    let body = if preview {
+                        i18n::tf(
+                            "Do portfela wpłynęło {amount} XNO.",
+                            &[("amount", &payment.amount)],
+                        )
+                    } else {
+                        i18n::t("Do portfela Nano wpłynęły środki.")
+                    };
+                    notify::show(
+                        self.app.config().identifier.clone(),
+                        "wallet",
+                        i18n::t("Portfel Nano"),
+                        body,
+                        None,
+                    );
+                    chime(&self.app, "kaching");
+                }
+                notify_wallet(&self.app);
+            }
+            ChatEvent::WalletChanged => notify_wallet(&self.app),
             ChatEvent::Delivered { peer, id, group } => {
                 let changed = match &group {
                     Some(group) => shared.store.lock().unwrap().delivered_by(group, &id, &peer),
@@ -1116,37 +1425,72 @@ impl Listener {
         let seen = window
             .as_ref()
             .is_some_and(|window| window.is_focused().unwrap_or(false));
+        let payment = message.payment.is_some();
+        let alert = (!seen).then(|| message.clone());
         let fresh = shared.store.lock().unwrap().receive(&key, message, seen);
         if !fresh {
             return;
         }
-        if !seen {
-            self.alert(&key, window);
+        if let Some(message) = alert {
+            self.alert(&key, window, &message);
         }
-        notify_changed(&self.app, key, "incoming");
+        notify_changed(&self.app, key, if payment { "payment" } else { "incoming" });
     }
 
     /// Tells the person about a message they have not seen: a system
-    /// notification without the text, so nothing leaks onto the screen,
-    /// and a highlight on the window in the taskbar.
-    fn alert(&self, key: &str, chat_window: Option<tauri::WebviewWindow>) {
+    /// notification with the sender's picture and, unless turned off, a
+    /// short preview; the chosen sound; and a highlight on the window in
+    /// the taskbar.
+    fn alert(&self, key: &str, chat_window: Option<tauri::WebviewWindow>, message: &Message) {
         let shared = self.app.state::<Shared>();
-        let body = match title_of(&shared, key) {
-            Some(title) if is_group(key) => format!("Nowa wiadomość w grupie: {title}"),
-            Some(title) => format!("Nowa wiadomość od: {title}"),
-            None => "Nowa wiadomość".into(),
+        let core = shared.core();
+        let settings = shared.notify.lock().unwrap().clone();
+        let author = message.author.clone().unwrap_or_else(|| key.to_owned());
+        let conversation = title_of(&shared, key).unwrap_or_else(|| "Szept".into());
+        let unread = shared.store.lock().unwrap().unread(key);
+        let title = if unread > 1 {
+            format!("{conversation} ({unread})")
+        } else {
+            conversation
         };
-        let _ = self
-            .app
-            .notification()
-            .builder()
-            .title("Szept")
-            .body(body)
-            .show();
+        let body = if settings.preview {
+            let text = notify::preview(message);
+            if is_group(key) {
+                let group = find_group(&core, key);
+                format!("{}: {text}", person_name(&core, &author, group.as_ref()))
+            } else {
+                text
+            }
+        } else if message.payment.is_some() {
+            i18n::t("Nowa płatność")
+        } else {
+            i18n::t("Nowa wiadomość")
+        };
+        let icon = notify::icon(
+            &shared.data_dir.join("notify-icons"),
+            &author,
+            core.avatar(author.clone()),
+        );
+        notify::show(self.app.config().identifier.clone(), key, title, body, icon);
+        chime(
+            &self.app,
+            if message.payment.is_some() {
+                "kaching"
+            } else {
+                &settings.sound
+            },
+        );
         let window = chat_window.or_else(|| self.app.get_webview_window("main"));
         if let Some(window) = window {
             let _ = window.request_user_attention(Some(UserAttentionType::Informational));
         }
+    }
+}
+
+/// Asks the contact list window, which is always there, to play a sound.
+fn chime(app: &AppHandle, sound: &str) {
+    if sound != "none" {
+        let _ = app.emit_to("main", "chime", sound.to_owned());
     }
 }
 
@@ -1178,6 +1522,10 @@ fn chat_label(peer: &str) -> String {
 }
 
 fn qr_svg(text: &str) -> CommandResult<String> {
+    labeled_qr_svg(text, &i18n::t("Kod QR z Twoim identyfikatorem"))
+}
+
+fn labeled_qr_svg(text: &str, label: &str) -> CommandResult<String> {
     let code = qr_code(text.to_owned()).map_err(failed)?;
     let size = code.size as usize;
     // A quiet zone of four modules, as the QR standard asks for.
@@ -1190,7 +1538,7 @@ fn qr_svg(text: &str) -> CommandResult<String> {
     Ok(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {total} {total}\" \
          shape-rendering=\"crispEdges\" role=\"img\" \
-         aria-label=\"Kod QR z Twoim identyfikatorem\">\
+         aria-label=\"{label}\">\
          <rect width=\"{total}\" height=\"{total}\" fill=\"#fff\"/>\
          <path d=\"{path}\" fill=\"#1b2140\"/></svg>"
     ))
@@ -1233,6 +1581,7 @@ fn main() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            i18n::load(&data_dir);
             let core = App::new(data_dir.to_string_lossy().into_owned(), false)?;
             // Offers end with the app, so last session's recordings can go.
             let outgoing = data_dir.join("outgoing");
@@ -1242,6 +1591,7 @@ fn main() {
                 store: Mutex::new(Store::default()),
                 outgoing,
                 data_dir: data_dir.clone(),
+                notify: Mutex::new(notify::load(&data_dir)),
             });
             core.start(Arc::new(Listener {
                 app: app.handle().clone(),
@@ -1307,6 +1657,23 @@ fn main() {
             open_file,
             reveal,
             normalize_id,
+            notify_settings,
+            set_notify_settings,
+            set_language,
+            wallet,
+            wallet_create,
+            wallet_words,
+            wallet_backup_quiz,
+            wallet_confirm_backup,
+            wallet_restore,
+            wallet_disable,
+            wallet_set_nodes,
+            wallet_balance,
+            wallet_receive,
+            check_nano_amount,
+            check_nano_address,
+            send_nano,
+            send_nano_to_address,
         ])
         .build(tauri::generate_context!())
         .expect("cannot start the application")

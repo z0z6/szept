@@ -49,10 +49,10 @@ class SzeptService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL,
-                "Działanie w tle",
+                t("Działanie w tle"),
                 NotificationManager.IMPORTANCE_MIN,
             ).apply {
-                description = "Stałe powiadomienie, dzięki któremu Szept odbiera wiadomości w tle"
+                description = t("Stałe powiadomienie, dzięki któremu Szept odbiera wiadomości w tle")
                 setShowBadge(false)
             }
             manager.createNotificationChannel(channel)
@@ -71,14 +71,14 @@ class SzeptService : Service() {
         )
         val notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Szept działa w tle")
-            .setContentText("Odbiera wiadomości i pliki, dopóki jest połączenie z internetem")
+            .setContentTitle(t("Szept działa w tle"))
+            .setContentText(t("Odbiera wiadomości i pliki, dopóki jest połączenie z internetem"))
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(openApp)
-            .addAction(0, "Wyłącz", stop)
+            .addAction(0, t("Wyłącz"), stop)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceCompat.startForeground(

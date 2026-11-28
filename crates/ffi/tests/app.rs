@@ -591,3 +591,122 @@ fn an_archive_brings_back_identity_contacts_and_conversations() {
     ola.stop();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_wallet_is_optional_and_its_address_reaches_contacts() {
+    use komunikator_ffi::{
+        format_nano_amount, import_archive, nano_link, normalize_nano_address, parse_nano_amount,
+    };
+
+    let (ala, _ala_events) = new_app();
+    let (ola, ola_events) = new_app();
+    ala.add_contact("ola".into(), ola.my_id()).unwrap();
+    ola.add_contact("ala".into(), ala.my_id()).unwrap();
+
+    // Nothing happens until Ala asks for it.
+    let status = ala.wallet_status();
+    assert!(!status.exists && !status.enabled && status.address.is_none());
+    assert!(ala.wallet_words().is_err());
+    assert!(ala.wallet_balance().is_err());
+
+    let status = ala.wallet_create().unwrap();
+    assert!(status.exists && status.enabled && !status.backed_up);
+    let address = status.address.clone().unwrap();
+    assert!(address.starts_with("nano_"));
+    assert_eq!(
+        normalize_nano_address(format!(" nano:{address}?amount=1")).unwrap(),
+        address
+    );
+    assert_eq!(
+        nano_link(
+            address.clone(),
+            Some(parse_nano_amount("1,5".into()).unwrap())
+        )
+        .unwrap(),
+        format!("nano:{address}?amount=1500000000000000000000000000000")
+    );
+    assert_eq!(
+        format_nano_amount("1500000000000000000000000000000".into()).unwrap(),
+        "1.5"
+    );
+
+    // Turning it on again opens the same wallet, it never makes a new one.
+    assert_eq!(ala.wallet_create().unwrap().address.unwrap(), address);
+
+    // The backup check.
+    let words = ala.wallet_words().unwrap();
+    assert_eq!(words.len(), 24);
+    let quiz = ala.wallet_backup_quiz();
+    assert_eq!(quiz.len(), 3);
+    let wrong: Vec<String> = quiz.iter().map(|_| "szept".to_owned()).collect();
+    assert!(!ala.wallet_confirm_backup(quiz.clone(), wrong).unwrap());
+    let right: Vec<String> = quiz
+        .iter()
+        .map(|position| words[*position as usize - 1].to_uppercase())
+        .collect();
+    assert!(ala.wallet_confirm_backup(quiz, right).unwrap());
+    assert!(ala.wallet_status().backed_up);
+
+    // Ola learns the address on connecting, and that it is gone when Ala
+    // turns the wallet off.
+    dial(&ala, &ola);
+    let ala_id = ala.my_id();
+    wait_for(&ola_events, |event| match event {
+        ChatEvent::ContactWalletChanged { peer } if peer == ala_id => Some(()),
+        _ => None,
+    });
+    assert_eq!(ola.contact_wallet(ala.my_id()).unwrap(), address);
+    assert!(ola.contact_wallet(ola.my_id()).is_none());
+    assert!(
+        ola.send_nano(ala.my_id(), "1".into()).is_err(),
+        "Ola has no wallet"
+    );
+
+    ala.wallet_disable().unwrap();
+    wait_for(&ola_events, |event| match event {
+        ChatEvent::ContactWalletChanged { peer } if peer == ala_id => Some(()),
+        _ => None,
+    });
+    assert!(ola.contact_wallet(ala.my_id()).is_none());
+    let status = ala.wallet_status();
+    assert!(status.exists && !status.enabled);
+    assert_eq!(status.address.as_deref(), Some(address.as_str()));
+
+    // The words restore the same address anywhere, and the archive carries
+    // the seed to a new install.
+    let (other, _other_events) = new_app();
+    let restored = other.wallet_restore(words.join(" ")).unwrap();
+    assert_eq!(restored.address.unwrap(), address);
+    assert!(other.wallet_restore("abandon abandon".into()).is_err());
+
+    let dir = std::env::temp_dir().join(format!("komunikator-wallet-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("szept.szept").to_string_lossy().into_owned();
+    ala.export_archive(
+        archive.clone(),
+        "zielony-most-pada-rzeka-17".into(),
+        false,
+        vec![],
+        Default::default(),
+    )
+    .unwrap();
+    let fresh = dir.join("fresh").to_string_lossy().into_owned();
+    drop(App::new(fresh.clone(), true).unwrap());
+    let imported = import_archive(
+        fresh.clone(),
+        archive,
+        "zielony-most-pada-rzeka-17".into(),
+        false,
+    )
+    .unwrap();
+    assert!(imported.wallet_restored && !imported.identity_restored);
+    let back = App::new(fresh, true).unwrap();
+    let status = back.wallet_status();
+    assert!(status.enabled && status.backed_up);
+    assert_eq!(status.address.unwrap(), address);
+
+    ala.stop();
+    ola.stop();
+    other.stop();
+    let _ = std::fs::remove_dir_all(dir);
+}

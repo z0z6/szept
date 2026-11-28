@@ -21,7 +21,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-use crate::{ChatEvent, EventListener, Media, Shared, download_task};
+use crate::{ChatEvent, EventListener, Media, Shared, download_task, wallet};
 
 /// How often people with something queued, and contacts, are dialled again.
 const RETRY_EVERY: Duration = Duration::from_secs(10);
@@ -267,6 +267,27 @@ impl Engine {
                     Post::File { offer, media } => {
                         self.offered(peer, id, sent_at_ms, offer, media, group);
                     }
+                    // Payments are between two people, never in a group.
+                    Post::Payment { block, amount } if group.is_none() => {
+                        self.emit(ChatEvent::Payment {
+                            peer: peer.to_string(),
+                            id: id.to_string(),
+                            sent_at_ms,
+                            block: komunikator_nano::hex(&block),
+                            amount_raw: amount.to_string(),
+                            amount: komunikator_nano::format_xno(amount),
+                        });
+                        tokio::spawn(wallet::check_payment(
+                            self.shared.active_wallet(),
+                            self.listener.clone(),
+                            self.shared.wallet_kick.clone(),
+                            peer,
+                            id,
+                            block,
+                            amount,
+                        ));
+                    }
+                    Post::Payment { .. } => {}
                 }
             }
             Event::Reaction {
@@ -289,6 +310,14 @@ impl Engine {
             Event::Name { peer, name } => {
                 if self.shared.store_name(&peer, &name) {
                     self.emit(ChatEvent::NameChanged {
+                        peer: peer.to_string(),
+                    });
+                }
+            }
+            Event::Wallet { peer, account } => {
+                // Only contacts can be paid from the chat.
+                if self.shared.is_contact(&peer) && self.shared.store_peer_wallet(&peer, account) {
+                    self.emit(ChatEvent::ContactWalletChanged {
                         peer: peer.to_string(),
                     });
                 }
@@ -423,17 +452,22 @@ impl Engine {
         }
     }
 
-    /// Sends our picture (even when empty, so a removal reaches them) and
-    /// our name, in the background.
+    /// Sends our picture (even when empty, so a removal reaches them), our
+    /// name and, to contacts, our Nano address, in the background.
     fn send_profile(&self, peer: EndpointId) {
         let image = self.shared.avatar.lock().unwrap().clone();
         let name = self.shared.name_signal();
+        let wallet = self
+            .shared
+            .is_contact(&peer)
+            .then(|| self.shared.wallet_signal())
+            .flatten();
         let node = self.node.clone();
         tokio::spawn(async move {
             // Failure means the connection just dropped; the next one retries.
             let _ = node.send_avatar(peer, &image).await;
-            if let Some(name) = name {
-                let _ = node.signal(peer, &name).await;
+            for signal in name.iter().chain(wallet.iter()) {
+                let _ = node.signal(peer, signal).await;
             }
         });
     }

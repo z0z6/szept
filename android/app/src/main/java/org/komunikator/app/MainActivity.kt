@@ -59,6 +59,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -144,7 +146,9 @@ class MainActivity : ComponentActivity() {
             // The text size chosen in Szept, on top of the phone's own.
             val density = LocalDensity.current
             val scaled = Density(density.density, density.fontScale * appearance.textSize.scale)
-            CompositionLocalProvider(LocalDensity provides scaled) {
+            // Arabic reads right to left, whatever the phone's own language.
+            val direction = if (I18n.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
+            CompositionLocalProvider(LocalDensity provides scaled, LocalLayoutDirection provides direction) {
                 MaterialTheme(colorScheme = colors) {
                     Surface(modifier = Modifier.fillMaxSize()) {
                         Root(model, appearance, dark, onRestart = { SzeptService.start(this) })
@@ -189,13 +193,13 @@ private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRest
     when {
         state.stopped -> Box(Modifier.fillMaxSize().padding(24.dp), Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Szept jest wyłączony", style = MaterialTheme.typography.titleMedium)
+                Text(t("Szept jest wyłączony"), style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Nie odbiera wiadomości ani plików, dopóki go nie włączysz.",
+                    t("Nie odbiera wiadomości ani plików, dopóki go nie włączysz."),
                     modifier = Modifier.padding(vertical = 12.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Button(onClick = onRestart) { Text("Włącz") }
+                Button(onClick = onRestart) { Text(t("Włącz")) }
             }
         }
         !state.ready && state.error == null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -238,15 +242,15 @@ private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRest
     state.error?.let { message ->
         AlertDialog(
             onDismissRequest = model::clearError,
-            confirmButton = { TextButton(onClick = model::clearError) { Text("OK") } },
-            title = { Text("Coś poszło nie tak") },
+            confirmButton = { TextButton(onClick = model::clearError) { Text(t("OK")) } },
+            title = { Text(t("Coś poszło nie tak")) },
             text = { Text(friendly(message)) },
         )
     }
     state.info?.let { message ->
         AlertDialog(
             onDismissRequest = model::clearInfo,
-            confirmButton = { TextButton(onClick = model::clearInfo) { Text("OK") } },
+            confirmButton = { TextButton(onClick = model::clearInfo) { Text(t("OK")) } },
             text = { Text(message) },
         )
     }
@@ -254,32 +258,32 @@ private fun Root(model: Messenger, appearance: Appearance, dark: Boolean, onRest
 
 /** The core reports errors in English: translate the ones people meet. */
 private fun friendly(message: String): String = when {
-    "alias must be a single word" in message -> "Nazwa musi być jednym słowem, bez spacji."
-    "is already taken" in message -> "Masz już kontakt o tej nazwie."
-    "already saved as" in message -> "Ta osoba jest już w kontaktach."
-    "your own identifier" in message -> "To Twój własny identyfikator."
+    "alias must be a single word" in message -> t("Nazwa musi być jednym słowem, bez spacji.")
+    "is already taken" in message -> t("Masz już kontakt o tej nazwie.")
+    "already saved as" in message -> t("Ta osoba jest już w kontaktach.")
+    "your own identifier" in message -> t("To Twój własny identyfikator.")
     "not a valid identifier" in message || "identifier is empty" in message ->
-        "To nie jest identyfikator Szeptu."
-    "picture is too large" in message -> "To zdjęcie jest za duże."
-    "JPEG, PNG, WebP or GIF" in message -> "Wybierz zdjęcie w formacie JPEG, PNG, WebP albo GIF."
-    "media file is too large" in message -> "Ten plik jest za duży na wiadomość. Wyślij go spinaczem."
-    "cannot be sent as media" in message -> "Tego pliku nie da się wysłać jako GIF."
-    "wrong password, or the archive is damaged" in message -> "Złe hasło albo uszkodzone archiwum."
-    "not a Szept archive" in message -> "To nie jest archiwum Szeptu."
-    "newer Szept" in message -> "To archiwum pochodzi z nowszej wersji Szeptu. Najpierw zaktualizuj aplikację."
-    "password must have at least" in message -> "Hasło musi mieć co najmniej 12 znaków."
-    "too easy to guess" in message -> "To hasło łatwo odgadnąć. Użyj dłuższego, najlepiej z kilku słów."
-    "unreasonable key settings" in message -> "To archiwum ma podejrzane ustawienia szyfrowania i nie zostanie otwarte."
-    "already has this key" in message -> "Ten kontakt ma już ten klucz."
-    "only contacts can be added" in message -> "Do grupy możesz dodać tylko swoje kontakty."
-    "at least one other member" in message -> "Grupa potrzebuje co najmniej jednej osoby poza Tobą."
-    "members" in message && "at most" in message -> "Grupa ma za dużo osób."
-    "the group needs a name" in message -> "Nadaj grupie nazwę."
-    "only the owner" in message -> "Grupę zmienia tylko jej właściciel."
-    "not in this group" in message -> "Nie jesteś już w tej grupie."
-    "name is too long" in message -> "To imię jest za długie."
-    "too long" in message -> "Wiadomość jest za długa."
-    else -> message
+        t("To nie jest identyfikator Szeptu.")
+    "picture is too large" in message -> t("To zdjęcie jest za duże.")
+    "JPEG, PNG, WebP or GIF" in message -> t("Wybierz zdjęcie w formacie JPEG, PNG, WebP albo GIF.")
+    "media file is too large" in message -> t("Ten plik jest za duży na wiadomość. Wyślij go spinaczem.")
+    "cannot be sent as media" in message -> t("Tego pliku nie da się wysłać jako GIF.")
+    "wrong password, or the archive is damaged" in message -> t("Złe hasło albo uszkodzone archiwum.")
+    "not a Szept archive" in message -> t("To nie jest archiwum Szeptu.")
+    "newer Szept" in message -> t("To archiwum pochodzi z nowszej wersji Szeptu. Najpierw zaktualizuj aplikację.")
+    "password must have at least" in message -> t("Hasło musi mieć co najmniej 12 znaków.")
+    "too easy to guess" in message -> t("To hasło łatwo odgadnąć. Użyj dłuższego, najlepiej z kilku słów.")
+    "unreasonable key settings" in message -> t("To archiwum ma podejrzane ustawienia szyfrowania i nie zostanie otwarte.")
+    "already has this key" in message -> t("Ten kontakt ma już ten klucz.")
+    "only contacts can be added" in message -> t("Do grupy możesz dodać tylko swoje kontakty.")
+    "at least one other member" in message -> t("Grupa potrzebuje co najmniej jednej osoby poza Tobą.")
+    "members" in message && "at most" in message -> t("Grupa ma za dużo osób.")
+    "the group needs a name" in message -> t("Nadaj grupie nazwę.")
+    "only the owner" in message -> t("Grupę zmienia tylko jej właściciel.")
+    "not in this group" in message -> t("Nie jesteś już w tej grupie.")
+    "name is too long" in message -> t("To imię jest za długie.")
+    "too long" in message -> t("Wiadomość jest za długa.")
+    else -> friendlyWallet(message)
 }
 
 /** The last line of a conversation, short, for the list. */
@@ -287,13 +291,14 @@ private fun previewOf(last: Message): String {
     val file = last.file
     val text = when {
         last.system -> last.body
-        last.sticker != null -> "Naklejka"
+        last.sticker != null -> t("Naklejka")
+        last.payment != null -> "$XNO_SIGN ${last.payment.amount} XNO"
         file == null -> last.body
-        file.media == "voice" -> "🎤 Wiadomość głosowa"
+        file.media == "voice" -> t("🎤 Wiadomość głosowa")
         file.media == "gif" -> "GIF"
         else -> "📎 ${file.name}"
     }
-    return if (last.mine) "Ty: $text" else text
+    return if (last.mine) t("Ty: {preview}", "preview" to text) else text
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -314,32 +319,50 @@ private fun ContactsScreen(
     var menuFor by remember { mutableStateOf<String?>(null) }
     var newGroup by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
+    // The optional Nano wallet.
+    var walletIntro by remember { mutableStateOf(false) }
+    var walletOpen by remember { mutableStateOf(false) }
+    var walletWords by remember { mutableStateOf(false) }
+    var walletRestore by remember { mutableStateOf(false) }
+    var walletNodes by remember { mutableStateOf(false) }
+    var walletSend by remember { mutableStateOf(false) }
+    fun toggleWallet() {
+        val wallet = state.wallet
+        if (wallet?.enabled == true) {
+            model.walletDisable()
+        } else if (wallet?.exists == true) {
+            model.walletCreate()
+            if (!wallet.backedUp) walletWords = true
+        } else {
+            walletIntro = true
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Szept") },
                 actions = {
-                    TextButton(onClick = { newGroup = true }) { Text("Nowa grupa") }
+                    TextButton(onClick = { newGroup = true }) { Text(t("Nowa grupa")) }
                     IconButton(
                         onClick = { settings = true },
-                        modifier = Modifier.semantics { contentDescription = "Ustawienia: Twoje zdjęcie i wygląd" },
+                        modifier = Modifier.semantics { contentDescription = t("Ustawienia: Twoje zdjęcie i wygląd") },
                     ) { Avatar(alias = "", online = false, picture = state.myAvatar, size = 36) }
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { adding = true }) { Text("Dodaj kontakt") }
+            ExtendedFloatingActionButton(onClick = { adding = true }) { Text(t("Dodaj kontakt")) }
         },
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
             item { MyIdCard(state.myId) }
+            item { WalletCard(state, onOpen = { walletOpen = true }, onBackup = { walletWords = true }) }
             item { BatteryCard() }
             if (state.contacts.isEmpty()) {
                 item {
                     Text(
-                        "Nie masz jeszcze kontaktów. Zeskanuj kod drugiej osoby przyciskiem " +
-                            "Dodaj kontakt i pokaż jej swój, żeby mogła dodać Ciebie.",
+                        t("Nie masz jeszcze kontaktów. Zeskanuj kod drugiej osoby przyciskiem Dodaj kontakt i pokaż jej swój, żeby mogła dodać Ciebie."),
                         modifier = Modifier.padding(16.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -348,7 +371,7 @@ private fun ContactsScreen(
             if (state.groups.isNotEmpty()) {
                 item {
                     Text(
-                        "Grupy",
+                        t("Grupy"),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
                     )
@@ -378,7 +401,7 @@ private fun ContactsScreen(
                         Text(group.name, fontWeight = if (unread > 0) FontWeight.Bold else null)
                     },
                     supportingContent = {
-                        Text(last?.let(::previewOf) ?: "${group.members.size} osób", maxLines = 1)
+                        Text(last?.let(::previewOf) ?: t("{members} osób", "members" to group.members.size), maxLines = 1)
                     },
                     trailingContent = { if (unread > 0) Badge { Text("$unread") } },
                 )
@@ -387,7 +410,7 @@ private fun ContactsScreen(
             if (state.contacts.isNotEmpty()) {
                 item {
                     Text(
-                        "Kontakty",
+                        t("Kontakty"),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
                     )
@@ -405,7 +428,7 @@ private fun ContactsScreen(
                     },
                     supportingContent = {
                         val preview = when {
-                            last == null -> if (online) "Połączony" else "Niepołączony"
+                            last == null -> if (online) t("Połączony") else t("Niepołączony")
                             else -> previewOf(last)
                         }
                         Text(preview, maxLines = 1)
@@ -419,14 +442,14 @@ private fun ContactsScreen(
                                 TextButton(onClick = { menuFor = contact.id }) { Text("⋮") }
                                 DropdownMenu(expanded = menuFor == contact.id, onDismissRequest = { menuFor = null }) {
                                     DropdownMenuItem(
-                                        text = { Text("Nowy klucz kontaktu") },
+                                        text = { Text(t("Nowy klucz kontaktu")) },
                                         onClick = {
                                             menuFor = null
                                             rekeying = contact
                                         },
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Usuń kontakt") },
+                                        text = { Text(t("Usuń kontakt")) },
                                         onClick = {
                                             menuFor = null
                                             removing = contact
@@ -460,7 +483,65 @@ private fun ContactsScreen(
             onImport = { uri, password, identity ->
                 model.restoreArchive(uri, password, identity, appearance::apply)
             },
+            onPreviewSound = model::previewSound,
+            wallet = state.wallet,
+            onWalletToggle = { toggleWallet() },
+            onWalletRestore = { walletRestore = true },
+            onWalletNodes = { walletNodes = true },
             onDismiss = { settings = false },
+        )
+    }
+
+    if (walletIntro) {
+        WalletIntroDialog(
+            onDismiss = { walletIntro = false },
+            onCreate = {
+                walletIntro = false
+                model.walletCreate()
+                walletWords = true
+            },
+        )
+    }
+    if (walletWords) {
+        WordsDialog(model = model, exists = state.wallet?.exists == true, onDismiss = { walletWords = false })
+    }
+    if (walletOpen && !walletWords && !walletSend) {
+        WalletDialog(
+            state = state,
+            onRefresh = model::refreshBalance,
+            onReceive = model::walletReceive,
+            onSend = { walletSend = true },
+            onWords = { walletWords = true },
+            onDismiss = { walletOpen = false },
+        )
+    }
+    if (walletSend) {
+        SendNanoDialog(
+            recipient = null,
+            fixedAddress = null,
+            paying = state.paying,
+            onDismiss = { walletSend = false },
+            onSend = { address, amount -> model.sendNanoToAddress(address, amount) },
+        )
+    }
+    if (walletRestore) {
+        RestoreWalletDialog(
+            hasWallet = state.wallet?.exists == true,
+            onDismiss = { walletRestore = false },
+            onRestore = { words ->
+                walletRestore = false
+                model.walletRestore(words)
+            },
+        )
+    }
+    if (walletNodes) {
+        NanoNodesDialog(
+            current = state.wallet?.nodes.orEmpty(),
+            onDismiss = { walletNodes = false },
+            onSave = { nodes ->
+                walletNodes = false
+                model.walletSetNodes(nodes)
+            },
         )
     }
 
@@ -478,12 +559,12 @@ private fun ContactsScreen(
 
     if (newGroup) {
         GroupDialog(
-            title = "Nowa grupa",
+            title = t("Nowa grupa"),
             contacts = state.contacts,
             initialName = "",
             others = emptyList(),
             initialMembers = emptySet(),
-            confirm = "Utwórz",
+            confirm = t("Utwórz"),
             onDismiss = { newGroup = false },
             onConfirm = { name, members ->
                 newGroup = false
@@ -506,15 +587,15 @@ private fun ContactsScreen(
     removing?.let { contact ->
         AlertDialog(
             onDismissRequest = { removing = null },
-            title = { Text("Usunąć kontakt ${contact.alias}?") },
-            text = { Text("Rozmowa zniknie, a ta osoba nie będzie mogła się z Tobą połączyć.") },
+            title = { Text(t("Usunąć kontakt {alias}?", "alias" to contact.alias)) },
+            text = { Text(t("Rozmowa zniknie, a ta osoba nie będzie mogła się z Tobą połączyć.")) },
             confirmButton = {
                 TextButton(onClick = {
                     removing = null
                     onRemove(contact)
-                }) { Text("Usuń") }
+                }) { Text(t("Usuń")) }
             },
-            dismissButton = { TextButton(onClick = { removing = null }) { Text("Anuluj") } },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text(t("Anuluj")) } },
         )
     }
 }
@@ -590,10 +671,9 @@ private fun BatteryCard() {
     if (exempt || dismissed) return
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("Odbieranie w tle", style = MaterialTheme.typography.titleSmall)
+            Text(t("Odbieranie w tle"), style = MaterialTheme.typography.titleSmall)
             Text(
-                "Żeby wiadomości i pliki docierały przy wygaszonym ekranie, " +
-                    "pozwól Szeptowi działać bez oszczędzania baterii.",
+                t("Żeby wiadomości i pliki docierały przy wygaszonym ekranie, pozwól Szeptowi działać bez oszczędzania baterii."),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 6.dp),
             )
@@ -606,8 +686,8 @@ private fun BatteryCard() {
                     } catch (e: Exception) {
                         ask.launch(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                     }
-                }) { Text("Pozwól") }
-                TextButton(onClick = { dismissed = true }) { Text("Nie teraz") }
+                }) { Text(t("Pozwól")) }
+                TextButton(onClick = { dismissed = true }) { Text(t("Nie teraz")) }
             }
         }
     }
@@ -638,18 +718,18 @@ private fun MyIdCard(myId: String) {
                     .size(112.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { enlarged = true }
-                    .semantics { contentDescription = "Twój kod QR. Dotknij, aby powiększyć." },
+                    .semantics { contentDescription = t("Twój kod QR. Dotknij, aby powiększyć.") },
             )
             Column {
-                Text("Twój kod", style = MaterialTheme.typography.titleMedium)
+                Text(t("Twój kod"), style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Pokaż go drugiej osobie albo prześlij jej identyfikator.",
+                    t("Pokaż go drugiej osobie albo prześlij jej identyfikator."),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
                 Row {
                     TextButton(onClick = { clipboard.setText(AnnotatedString(myId)) }) {
-                        Text("Kopiuj")
+                        Text(t("Kopiuj"))
                     }
                     TextButton(onClick = {
                         val send = Intent(Intent.ACTION_SEND)
@@ -657,7 +737,7 @@ private fun MyIdCard(myId: String) {
                             .putExtra(Intent.EXTRA_TEXT, myId)
                         context.startActivity(Intent.createChooser(send, null))
                     }) {
-                        Text("Udostępnij")
+                        Text(t("Udostępnij"))
                     }
                 }
             }
@@ -667,8 +747,8 @@ private fun MyIdCard(myId: String) {
     if (enlarged) {
         AlertDialog(
             onDismissRequest = { enlarged = false },
-            confirmButton = { TextButton(onClick = { enlarged = false }) { Text("Zamknij") } },
-            title = { Text("Twój kod") },
+            confirmButton = { TextButton(onClick = { enlarged = false }) { Text(t("Zamknij")) } },
+            title = { Text(t("Twój kod")) },
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     QrImage(
@@ -691,7 +771,7 @@ private fun MyIdCard(myId: String) {
 
 /** Draws a QR code made by the Rust core, with the quiet zone around it. */
 @Composable
-private fun QrImage(text: String, modifier: Modifier = Modifier) {
+internal fun QrImage(text: String, modifier: Modifier = Modifier) {
     val code = remember(text) { runCatching { qrCode(text) }.getOrNull() } ?: return
     val size = code.size.toInt()
     Canvas(modifier = modifier.background(Color.White)) {
@@ -728,15 +808,15 @@ private fun AddContactDialog(
         val parsed = parseId(scanned)
         if (parsed != null) {
             id = parsed
-            note = "Kod odczytany. Nadaj kontaktowi nazwę."
+            note = t("Kod odczytany. Nadaj kontaktowi nazwę.")
         } else {
-            note = "To nie jest kod Szeptu. Zeskanuj kod z aplikacji drugiej osoby."
+            note = t("To nie jest kod Szeptu. Zeskanuj kod z aplikacji drugiej osoby.")
         }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nowy kontakt") },
+        title = { Text(t("Nowy kontakt")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (hasCamera) {
@@ -745,13 +825,13 @@ private fun AddContactDialog(
                             scanner.launch(
                                 ScanOptions()
                                     .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                    .setPrompt("Skieruj aparat na kod QR drugiej osoby")
+                                    .setPrompt(t("Skieruj aparat na kod QR drugiej osoby"))
                                     .setBeepEnabled(false)
                                     .setOrientationLocked(false),
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Skanuj kod QR") }
+                    ) { Text(t("Skanuj kod QR")) }
                 }
                 note?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall)
@@ -759,13 +839,13 @@ private fun AddContactDialog(
                 OutlinedTextField(
                     value = id,
                     onValueChange = { id = it },
-                    label = { Text("Identyfikator") },
+                    label = { Text(t("Identyfikator")) },
                     minLines = 3,
                 )
                 OutlinedTextField(
                     value = alias,
                     onValueChange = { alias = it },
-                    label = { Text("Nazwa (jedno słowo)") },
+                    label = { Text(t("Nazwa (jedno słowo)")) },
                     singleLine = true,
                 )
             }
@@ -774,9 +854,9 @@ private fun AddContactDialog(
             TextButton(
                 onClick = { onConfirm(alias.trim(), id.trim()) },
                 enabled = alias.isNotBlank() && id.isNotBlank(),
-            ) { Text("Dodaj") }
+            ) { Text(t("Dodaj")) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(t("Anuluj")) } },
     )
 }
 
@@ -804,6 +884,10 @@ private fun ChatScreen(
     var picking by remember(key) { mutableStateOf(false) }
     var stickers by remember(key) { mutableStateOf(false) }
     var groupInfo by remember(key) { mutableStateOf(false) }
+    var paying by remember(key) { mutableStateOf(false) }
+    // Paying needs both wallets on; groups never pay.
+    val payTo = contact?.let { state.contactWallets[it.id] }
+        ?.takeIf { group == null && state.wallet?.enabled == true }
     val input = remember { context.getSystemService(InputMethodManager::class.java) }
     val listState = rememberLazyListState()
     val lastMine = messages.indexOfLast { it.mine }
@@ -819,7 +903,7 @@ private fun ChatScreen(
             picking = false
             editor?.let { input.hideSoftInputFromWindow(it.windowToken, 0) }
         } catch (e: Exception) {
-            Toast.makeText(context, "Nie udało się włączyć mikrofonu.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, t("Nie udało się włączyć mikrofonu."), Toast.LENGTH_LONG).show()
         }
     }
     fun finishRecording(send: Boolean) {
@@ -834,7 +918,7 @@ private fun ChatScreen(
         if (granted) {
             startRecording()
         } else {
-            Toast.makeText(context, "Bez dostępu do mikrofonu nie nagrasz wiadomości.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, t("Bez dostępu do mikrofonu nie nagrasz wiadomości."), Toast.LENGTH_LONG).show()
         }
     }
     LaunchedEffect(recording) {
@@ -858,6 +942,16 @@ private fun ChatScreen(
             stickers -> stickers = false
             else -> picking = false
         }
+    }
+
+    if (paying && payTo != null) {
+        SendNanoDialog(
+            recipient = title,
+            fixedAddress = payTo,
+            paying = state.paying,
+            onDismiss = { paying = false },
+            onSend = { _, amount -> model.sendNano(key, amount) },
+        )
     }
 
     if (groupInfo && group != null) {
@@ -885,7 +979,7 @@ private fun ChatScreen(
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = if (group != null) {
-                            Modifier.clickable(onClickLabel = "Członkowie grupy") { groupInfo = true }
+                            Modifier.clickable(onClickLabel = t("Członkowie grupy")) { groupInfo = true }
                         } else {
                             Modifier
                         },
@@ -898,17 +992,17 @@ private fun ChatScreen(
                                 when {
                                     group != null -> {
                                         val connected = group.members.count { it.id in state.online }
-                                        "${group.members.size} osób, połączonych: $connected · dotknij"
+                                        t("{members} osób, połączonych: {connected} · dotknij", "members" to group.members.size, "connected" to connected)
                                     }
-                                    online -> "Połączony"
-                                    else -> "Niepołączony, wiadomości poczekają"
+                                    online -> t("Połączony")
+                                    else -> t("Niepołączony, wiadomości poczekają")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
                 },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Wróć") } },
+                navigationIcon = { TextButton(onClick = onBack) { Text(t("Wróć")) } },
             )
         },
         bottomBar = {
@@ -927,12 +1021,12 @@ private fun ChatScreen(
                         )
                         Text(formatDuration(elapsed), fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Nagrywanie…",
+                            t("Nagrywanie…"),
                             modifier = Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        TextButton(onClick = { finishRecording(false) }) { Text("Anuluj") }
-                        Button(onClick = { finishRecording(true) }) { Text("Wyślij") }
+                        TextButton(onClick = { finishRecording(false) }) { Text(t("Anuluj")) }
+                        Button(onClick = { finishRecording(true) }) { Text(t("Wyślij")) }
                     }
                 } else {
                     Row(
@@ -953,7 +1047,7 @@ private fun ChatScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.semantics { contentDescription = "Emoji" },
+                            modifier = Modifier.semantics { contentDescription = t("Emoji") },
                         ) { Text("😊", fontSize = 22.sp) }
                         IconButton(
                             onClick = {
@@ -961,12 +1055,18 @@ private fun ChatScreen(
                                 picking = false
                                 editor?.let { input.hideSoftInputFromWindow(it.windowToken, 0) }
                             },
-                            modifier = Modifier.semantics { contentDescription = "Naklejki" },
+                            modifier = Modifier.semantics { contentDescription = t("Naklejki") },
                         ) { FigureView("pierog", 28.dp, animate = false) }
                         IconButton(
                             onClick = { pickFiles.launch(arrayOf("*/*")) },
-                            modifier = Modifier.semantics { contentDescription = "Wyślij pliki" },
+                            modifier = Modifier.semantics { contentDescription = t("Wyślij pliki") },
                         ) { Text("📎", fontSize = 22.sp) }
+                        if (payTo != null) {
+                            IconButton(
+                                onClick = { paying = true },
+                                modifier = Modifier.semantics { contentDescription = t("Wyślij środki Nano (XNO)") },
+                            ) { Text(XNO_SIGN, fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                        }
                         MessageField(
                             onTextChange = { draft = it },
                             onPicture = { uri, mime ->
@@ -975,7 +1075,7 @@ private fun ChatScreen(
                                 if (staged != null) {
                                     model.sendGif(key, staged)
                                 } else {
-                                    Toast.makeText(context, "Tego obrazu nie da się wysłać.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, t("Tego obrazu nie da się wysłać."), Toast.LENGTH_LONG).show()
                                 }
                             },
                             onCreated = { editor = it },
@@ -988,13 +1088,13 @@ private fun ChatScreen(
                                         PackageManager.PERMISSION_GRANTED
                                     if (granted) startRecording() else askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
                                 },
-                                modifier = Modifier.semantics { contentDescription = "Nagraj wiadomość głosową" },
+                                modifier = Modifier.semantics { contentDescription = t("Nagraj wiadomość głosową") },
                             ) { MicIcon() }
                         } else {
                             Button(onClick = {
                                 model.send(key, draft.trim())
                                 editor?.setText("")
-                            }) { Text("Wyślij") }
+                            }) { Text(t("Wyślij")) }
                         }
                     }
                 }
@@ -1032,8 +1132,7 @@ private fun ChatScreen(
             if (messages.isEmpty()) {
                 item {
                     Text(
-                        "Napisz pierwszą wiadomość, nagraj głosówkę albo wyślij plik spinaczem. " +
-                            "GIF-y wstawisz z klawiatury. Rozmowa trwa, dopóki Szept jest otwarty.",
+                        t("Napisz pierwszą wiadomość, nagraj głosówkę albo wyślij plik spinaczem. GIF-y wstawisz z klawiatury. Rozmowa trwa, dopóki Szept jest otwarty."),
                         modifier = Modifier.padding(24.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1093,9 +1192,9 @@ private fun MicIcon() {
 private val timeFormat: DateFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
 
 private fun statusLabel(status: Status) = when (status) {
-    Status.QUEUED -> "W kolejce"
-    Status.SENT -> "Wysłano"
-    Status.DELIVERED -> "Dostarczono"
+    Status.QUEUED -> t("W kolejce")
+    Status.SENT -> t("Wysłano")
+    Status.DELIVERED -> t("Dostarczono")
     Status.RECEIVED -> ""
 }
 

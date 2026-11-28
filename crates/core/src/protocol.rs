@@ -202,6 +202,13 @@ pub enum Post {
     },
     /// One of the animated stickers every Szept app draws, by its code.
     Sticker(String),
+    /// A Nano (XNO) payment that already left: the hash of the send block
+    /// and the amount in raw. The recipient checks both in the ledger
+    /// before showing it as paid; this post alone proves nothing.
+    Payment {
+        block: [u8; 32],
+        amount: u128,
+    },
 }
 
 impl Post {
@@ -219,6 +226,7 @@ impl Post {
                 }
             }
             Self::Sticker(code) => ensure!(is_code(code), "bad sticker code"),
+            Self::Payment { amount, .. } => ensure!(*amount > 0, "empty payment"),
         }
         Ok(())
     }
@@ -240,6 +248,9 @@ pub enum Signal {
     Leave(GroupId),
     /// The sender's display name.
     Name(String),
+    /// The sender's Nano account (its public key), or `None` when they
+    /// turned their wallet off.
+    Wallet(Option<[u8; 32]>),
 }
 
 impl Signal {
@@ -257,6 +268,7 @@ impl Signal {
             Self::Group(info) => Frame::Group { info: info.clone() },
             Self::Leave(group) => Frame::Leave { group: *group },
             Self::Name(name) => Frame::Name { name: name.clone() },
+            Self::Wallet(account) => Frame::Wallet { account: *account },
         }
     }
 }
@@ -477,6 +489,9 @@ pub(crate) enum Frame {
     Leave { group: GroupId },
     /// The sender's display name.
     Name { name: String },
+    /// The sender's Nano account, or `None` when their wallet is off. Sent
+    /// on every new connection. Older versions of Szept drop it unread.
+    Wallet { account: Option<[u8; 32]> },
 }
 
 /// What the receiver of a file asks for on a fresh bidirectional stream: the
@@ -530,7 +545,7 @@ impl Frame {
             }
             Self::Group { info } => info.check()?,
             Self::Name { name } => ensure!(is_name(name), "bad name"),
-            Self::Ack { .. } | Self::Leave { .. } => {}
+            Self::Ack { .. } | Self::Leave { .. } | Self::Wallet { .. } => {}
         }
         Ok(frame)
     }
@@ -701,6 +716,17 @@ mod tests {
             Signal::Group(info.clone()).to_frame(),
             Signal::Leave(group).to_frame(),
             Signal::Name("Ala z Mokotowa".into()).to_frame(),
+            Signal::Wallet(Some([7; 32])).to_frame(),
+            Signal::Wallet(None).to_frame(),
+            Outgoing::post(
+                None,
+                Post::Payment {
+                    block: [9; 32],
+                    amount: u128::MAX,
+                },
+            )
+            .unwrap()
+            .to_frame(),
         ] {
             assert_eq!(Frame::decode(&frame.encode().unwrap()).unwrap(), frame);
         }
@@ -708,6 +734,11 @@ mod tests {
 
         assert!(Outgoing::post(None, Post::Sticker("Zły Kod!".into())).is_err());
         assert!(Outgoing::post(None, Post::Text(String::new())).is_err());
+        let nothing = Post::Payment {
+            block: [9; 32],
+            amount: 0,
+        };
+        assert!(Outgoing::post(None, nothing).is_err());
         let mut broken = info.clone();
         broken.members.retain(|member| member.id != info.owner);
         let frame = Frame::Group { info: broken };

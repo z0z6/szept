@@ -4,6 +4,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,9 +18,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,6 +43,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -59,6 +66,11 @@ fun SettingsDialog(
     onSaveName: (String) -> Unit,
     onExport: (android.net.Uri, String, Boolean) -> Unit,
     onImport: (android.net.Uri, String, Boolean) -> Unit,
+    onPreviewSound: (String) -> Unit,
+    wallet: uniffi.komunikator_ffi.WalletStatus?,
+    onWalletToggle: () -> Unit,
+    onWalletRestore: () -> Unit,
+    onWalletNodes: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -70,9 +82,9 @@ fun SettingsDialog(
     val savePrefs = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             prefsNote = if (writePreferences(context, uri, appearance.toPreferences())) {
-                "Ustawienia zapisane do pliku."
+                t("Ustawienia zapisane do pliku.")
             } else {
-                "Nie udało się zapisać pliku."
+                t("Nie udało się zapisać pliku.")
             }
         }
     }
@@ -80,9 +92,9 @@ fun SettingsDialog(
         if (uri != null) {
             val preferences = readPreferences(context, uri)
             prefsNote = when {
-                preferences == null -> "To nie jest plik ustawień Szeptu."
-                appearance.apply(preferences) > 0 -> "Ustawienia wczytane."
-                else -> "W pliku nie było ustawień, które ta wersja zna."
+                preferences == null -> t("To nie jest plik ustawień Szeptu.")
+                appearance.apply(preferences) > 0 -> t("Ustawienia wczytane.")
+                else -> t("W pliku nie było ustawień, które ta wersja zna.")
             }
         }
     }
@@ -118,19 +130,19 @@ fun SettingsDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Gotowe") } },
-        title = { Text("Ustawienia") },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(t("Gotowe")) } },
+        title = { Text(t("Ustawienia")) },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Twoje zdjęcie", style = MaterialTheme.typography.titleSmall)
+                Text(t("Twoje zdjęcie"), style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(alias = "", online = false, picture = myAvatar, size = 64)
                     Column(modifier = Modifier.padding(start = 16.dp)) {
                         Text(
-                            "Kontakty zobaczą je przy Twojej nazwie, gdy się z nimi połączysz.",
+                            t("Kontakty zobaczą je przy Twojej nazwie, gdy się z nimi połączysz."),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -139,32 +151,36 @@ fun SettingsDialog(
                                 pick.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                                 )
-                            }) { Text("Wybierz") }
+                            }) { Text(t("Wybierz")) }
                             if (myAvatar != null) {
-                                TextButton(onClick = onRemoveAvatar) { Text("Usuń") }
+                                TextButton(onClick = onRemoveAvatar) { Text(t("Usuń")) }
                             }
                         }
                     }
                 }
 
-                Text("Twoje imię", style = MaterialTheme.typography.titleSmall)
+                Text(t("Twoje imię"), style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it.take(64) },
                         singleLine = true,
-                        placeholder = { Text("Na przykład Ala z Mokotowa") },
+                        placeholder = { Text(t("Na przykład Ala z Mokotowa")) },
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = { onSaveName(name) }, enabled = name.trim() != myName) { Text("Zapisz") }
+                    TextButton(onClick = { onSaveName(name) }, enabled = name.trim() != myName) { Text(t("Zapisz")) }
                 }
                 Text(
-                    "Widzą je kontakty i członkowie Twoich grup.",
+                    t("Widzą je kontakty i członkowie Twoich grup."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                Text("Motyw", style = MaterialTheme.typography.titleSmall)
+                LanguageChoice(appearance)
+
+                LanguageChoice(appearance)
+
+                Text(t("Motyw"), style = MaterialTheme.typography.titleSmall)
                 Column(
                     modifier = Modifier.selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -186,7 +202,7 @@ fun SettingsDialog(
                     }
                 }
 
-                Text("Jasność", style = MaterialTheme.typography.titleSmall)
+                Text(t("Jasność"), style = MaterialTheme.typography.titleSmall)
                 Column(modifier = Modifier.selectableGroup()) {
                     Mode.entries.forEach { mode ->
                         Row(
@@ -201,12 +217,12 @@ fun SettingsDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = appearance.mode == mode, onClick = null)
-                            Text(mode.label, modifier = Modifier.padding(start = 8.dp))
+                            Text(t(mode.label), modifier = Modifier.padding(start = 8.dp))
                         }
                     }
                 }
 
-                Text("Rozmiar tekstu", style = MaterialTheme.typography.titleSmall)
+                Text(t("Rozmiar tekstu"), style = MaterialTheme.typography.titleSmall)
                 Column(modifier = Modifier.selectableGroup()) {
                     TextSize.entries.forEach { size ->
                         Row(
@@ -221,45 +237,148 @@ fun SettingsDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = appearance.textSize == size, onClick = null)
-                            Text(size.label, modifier = Modifier.padding(start = 8.dp))
+                            Text(t(size.label), modifier = Modifier.padding(start = 8.dp))
                         }
                     }
                 }
 
-                Text("Twoje ustawienia", style = MaterialTheme.typography.titleSmall)
+                SoundSettings(appearance, onPreviewSound)
+
+                Text(t("Twoje ustawienia"), style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Wygląd i preferencje zapisują się same na tym telefonie. Możesz je też zapisać " +
-                        "do pliku i wczytać po reinstalacji albo na innym urządzeniu, także na komputerze. " +
-                        "Archiwum zawiera je automatycznie.",
+                    t("Wygląd i preferencje zapisują się same na tym telefonie. Możesz je też zapisać do pliku i wczytać po reinstalacji albo na innym urządzeniu, także na komputerze. Archiwum zawiera je automatycznie."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { savePrefs.launch("szept-ustawienia.json") }) { Text("Zapisz do pliku") }
+                    OutlinedButton(onClick = { savePrefs.launch("szept-ustawienia.json") }) { Text(t("Zapisz do pliku")) }
                     OutlinedButton(onClick = { loadPrefs.launch(arrayOf("application/json", "text/plain", "*/*")) }) {
-                        Text("Wczytaj")
+                        Text(t("Wczytaj"))
                     }
                 }
                 prefsNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 
-                Text("Archiwum", style = MaterialTheme.typography.titleSmall)
+                WalletSettings(
+                    wallet = wallet,
+                    onToggle = onWalletToggle,
+                    onRestore = onWalletRestore,
+                    onNodes = onWalletNodes,
+                )
+
+                Text(t("Archiwum"), style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Zapisz rozmowy, kontakty i grupy w zaszyfrowanym pliku, żeby wczytać je po " +
-                        "aktualizacji, ponownej instalacji albo na nowym telefonie.",
+                    t("Zapisz rozmowy, kontakty i grupy w zaszyfrowanym pliku, żeby wczytać je po aktualizacji, ponownej instalacji albo na nowym telefonie. Jeśli masz portfel Nano, jego seed zawsze trafia do archiwum."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (busy) {
-                    Text("Trwa praca z archiwum…", style = MaterialTheme.typography.bodySmall)
+                    Text(t("Trwa praca z archiwum…"), style = MaterialTheme.typography.bodySmall)
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { archiveMode = true }) { Text("Zapisz") }
-                        OutlinedButton(onClick = { archiveMode = false }) { Text("Wczytaj") }
+                        OutlinedButton(onClick = { archiveMode = true }) { Text(t("Zapisz")) }
+                        OutlinedButton(onClick = { archiveMode = false }) { Text(t("Wczytaj")) }
                     }
                 }
             }
         },
     )
+}
+
+/** The language: the phone's, or one chosen here. Each shows in its own name. */
+@Composable
+private fun LanguageChoice(appearance: Appearance) {
+    var open by remember { mutableStateOf(false) }
+    val current = LANGUAGES.firstOrNull { it.code == appearance.language }?.name ?: t("Jak w systemie")
+    Text(t("Język"), style = MaterialTheme.typography.titleSmall)
+    Box {
+        OutlinedButton(onClick = { open = true }) { Text(current) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(t("Jak w systemie")) },
+                onClick = {
+                    open = false
+                    appearance.chooseLanguage("system")
+                },
+            )
+            LANGUAGES.forEach { language ->
+                DropdownMenuItem(
+                    text = { Text(language.name) },
+                    onClick = {
+                        open = false
+                        appearance.chooseLanguage(language.code)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** The notification sound, previews in notifications and sounds in the app. */
+@Composable
+private fun SoundSettings(appearance: Appearance, onPreview: (String) -> Unit) {
+    Text(t("Dźwięk i powiadomienia"), style = MaterialTheme.typography.titleSmall)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = appearance.notifyPreview,
+                onValueChange = appearance::choosePreview,
+                role = Role.Checkbox,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = appearance.notifyPreview, onCheckedChange = null)
+        Text(t("Pokazuj w powiadomieniach początek wiadomości"), modifier = Modifier.padding(start = 8.dp))
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = appearance.sounds, onValueChange = appearance::chooseSounds, role = Role.Checkbox),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = appearance.sounds, onCheckedChange = null)
+        Text(t("Dźwięki w otwartej rozmowie"), modifier = Modifier.padding(start = 8.dp))
+    }
+    Text(
+        t("Powiadomienie zawsze pokazuje, kto pisze, i jego zdjęcie, a na zablokowanym ekranie tylko „Nowa wiadomość”. Dźwięk nowej wiadomości:"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    val choices = SOUND_CHOICES + SoundChoice("none", t("Bez dźwięku"), t("tylko powiadomienie"))
+    Column(modifier = Modifier.selectableGroup()) {
+        choices.forEach { choice ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectable(
+                        selected = appearance.sound == choice.id,
+                        onClick = {
+                            appearance.chooseSound(choice.id)
+                            if (choice.id != "none") onPreview(choice.id)
+                        },
+                        role = Role.RadioButton,
+                    )
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = appearance.sound == choice.id, onClick = null)
+                Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text(t(choice.name), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        t(choice.about),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (choice.id != "none") {
+                    TextButton(
+                        onClick = { onPreview(choice.id) },
+                        modifier = Modifier.semantics { contentDescription = t("Posłuchaj: {name}", "name" to t(choice.name)) },
+                    ) { Text("▶") }
+                }
+            }
+        }
+    }
 }
 
 /** A theme as a tiny conversation in its own colours. */
@@ -291,7 +410,7 @@ private fun ThemeChoice(
                 drawRoundRect(Color(palette.accent), Offset(c * 0.3f, c * 0.54f), Size(c * 0.54f, c * 0.18f), corner)
             }
             Text(
-                theme.name,
+                t(theme.name),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (selected) FontWeight.Bold else null,
                 textAlign = TextAlign.Center,

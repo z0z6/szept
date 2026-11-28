@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Rozmowa – Szept</title>
   <link rel="stylesheet" href="style.css">
+  <script src="i18n-data.js"></script>
+  <script src="i18n.js"></script>
   <script src="theme.js"></script>
 </head>
 <body>
@@ -46,6 +48,8 @@
         aria-label="Wyślij pliki">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M16.5 6.5 8.6 14.4a2 2 0 0 0 2.8 2.8l7.4-7.4a4 4 0 0 0-5.7-5.7l-7.6 7.6a6 6 0 0 0 8.5 8.5l6.3-6.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <button class="icon-button pay" id="pay" type="button" title="Wyślij XNO"
+        aria-label="Wyślij środki Nano (XNO)" hidden>Ӿ</button>
       <label class="visually-hidden" for="draft">Wiadomość</label>
       <textarea id="draft" rows="1" placeholder="Wiadomość"></textarea>
       <button class="icon-button mic" id="record" type="button"
@@ -76,6 +80,26 @@
     </form>
   </dialog>
 
+  <dialog id="pay-dialog" aria-labelledby="pay-title">
+    <form id="pay-form" method="dialog">
+      <h2 id="pay-title">Wyślij XNO</h2>
+      <div id="pay-fields">
+        <p class="hint" id="pay-to"></p>
+        <label class="field">Kwota w XNO
+          <input id="pay-amount" inputmode="decimal" autocomplete="off" required placeholder="np. 0,5">
+        </label>
+      </div>
+      <p class="confirm-text" id="pay-summary" hidden></p>
+      <p class="hint" id="pay-progress" role="status" hidden></p>
+      <p class="error" id="pay-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" data-close>Anuluj</button>
+        <button class="button primary" id="pay-confirm" type="submit">Dalej</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="sounds-data.js"></script>
   <script src="common.js"></script>
   <script src="emoji.js"></script>
   <script src="figures-data.js"></script>

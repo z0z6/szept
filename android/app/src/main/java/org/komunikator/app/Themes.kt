@@ -29,52 +29,52 @@ data class Theme(val id: String, val name: String, val light: Palette, val dark:
 
 val THEMES = listOf(
     Theme(
-        "szept", "Szept",
+        "szept", N_("Szept"),
         Palette(0xFFF3F4F8, 0xFFFFFFFF, 0xFF1B2140, 0xFF5A6183, 0xFFDDE0EB, 0xFF2F3A6B, 0xFFFFFFFF, 0xFFE3E6F4),
         Palette(0xFF12152A, 0xFF1B1F38, 0xFFE7E9F4, 0xFF9AA0C2, 0xFF2C3255, 0xFF9AA6F0, 0xFF12152A, 0xFF2A3163),
     ),
     Theme(
-        "las", "Las",
+        "las", N_("Las"),
         Palette(0xFFF1F5F1, 0xFFFFFFFF, 0xFF16261C, 0xFF54675A, 0xFFD8E3DA, 0xFF2F6B45, 0xFFFFFFFF, 0xFFDCEBDF),
         Palette(0xFF0F1912, 0xFF17241B, 0xFFE5EFE7, 0xFF98B0A0, 0xFF27392D, 0xFF8FD3A6, 0xFF0F1912, 0xFF23402D),
     ),
     Theme(
-        "morze", "Morze",
+        "morze", N_("Morze"),
         Palette(0xFFEFF6F6, 0xFFFFFFFF, 0xFF102A2D, 0xFF4D6A6D, 0xFFD3E5E6, 0xFF0F6B73, 0xFFFFFFFF, 0xFFD6ECEE),
         Palette(0xFF0B1A1C, 0xFF122527, 0xFFE2F1F2, 0xFF8FB3B6, 0xFF21393C, 0xFF7DD3DB, 0xFF0B1A1C, 0xFF1A3F43),
     ),
     Theme(
-        "wrzos", "Wrzos",
+        "wrzos", N_("Wrzos"),
         Palette(0xFFF6F2F8, 0xFFFFFFFF, 0xFF2A1A36, 0xFF6A5878, 0xFFE6DCEC, 0xFF6B3A8C, 0xFFFFFFFF, 0xFFECE0F3),
         Palette(0xFF1A1220, 0xFF241A2C, 0xFFF0E8F5, 0xFFB5A2C2, 0xFF3A2B45, 0xFFD2A8F0, 0xFF1A1220, 0xFF3D2A4E),
     ),
     Theme(
-        "bursztyn", "Bursztyn",
+        "bursztyn", N_("Bursztyn"),
         Palette(0xFFFAF6EE, 0xFFFFFFFF, 0xFF2E2310, 0xFF6E5F45, 0xFFECE2CF, 0xFF8A5A00, 0xFFFFFFFF, 0xFFF5E8CC),
         Palette(0xFF1C170D, 0xFF272013, 0xFFF5EEDF, 0xFFBCAE92, 0xFF3D3320, 0xFFF2C46B, 0xFF1C170D, 0xFF4A3A17),
     ),
     Theme(
-        "malina", "Malina",
+        "malina", N_("Malina"),
         Palette(0xFFFAF1F4, 0xFFFFFFFF, 0xFF33141F, 0xFF74505E, 0xFFF0D9E1, 0xFFA3204F, 0xFFFFFFFF, 0xFFF7DDE6),
         Palette(0xFF1E0F15, 0xFF2A161E, 0xFFF7E6EC, 0xFFC49AAB, 0xFF452332, 0xFFF598B8, 0xFF1E0F15, 0xFF52223A),
     ),
     Theme(
-        "grafit", "Grafit",
+        "grafit", N_("Grafit"),
         Palette(0xFFF3F3F4, 0xFFFFFFFF, 0xFF1E1F22, 0xFF5C5F66, 0xFFDCDDE0, 0xFF3B3E45, 0xFFFFFFFF, 0xFFE4E5E8),
         Palette(0xFF121214, 0xFF1C1C1F, 0xFFECECEE, 0xFFA0A2A8, 0xFF2F3034, 0xFFC9CCD3, 0xFF121214, 0xFF33353A),
     ),
     Theme(
-        "koral", "Koral",
+        "koral", N_("Koral"),
         Palette(0xFFFBF3F0, 0xFFFFFFFF, 0xFF34190F, 0xFF765649, 0xFFF1DDD5, 0xFFB2431F, 0xFFFFFFFF, 0xFFF8E0D7),
         Palette(0xFF1F120D, 0xFF2B1A13, 0xFFF8E9E3, 0xFFC9A294, 0xFF47291D, 0xFFFFA384, 0xFF1F120D, 0xFF55291A),
     ),
     Theme(
-        "lazur", "Lazur",
+        "lazur", N_("Lazur"),
         Palette(0xFFF0F5FB, 0xFFFFFFFF, 0xFF0F2238, 0xFF4E637B, 0xFFD6E2EF, 0xFF1F5FA8, 0xFFFFFFFF, 0xFFDBE8F7),
         Palette(0xFF0C1522, 0xFF132030, 0xFFE4EEF9, 0xFF94ADC8, 0xFF233650, 0xFF8EC2FF, 0xFF0C1522, 0xFF1B3A5E),
     ),
     Theme(
-        "oliwka", "Oliwka",
+        "oliwka", N_("Oliwka"),
         Palette(0xFFF5F5EE, 0xFFFFFFFF, 0xFF25260F, 0xFF63654A, 0xFFE3E4D2, 0xFF5B6118, 0xFFFFFFFF, 0xFFE9EBD2),
         Palette(0xFF16170D, 0xFF202114, 0xFFEEEFE0, 0xFFB1B394, 0xFF363822, 0xFFCDD47A, 0xFF16170D, 0xFF3B3E1B),
     ),
@@ -82,17 +82,17 @@ val THEMES = listOf(
 
 /** Light, dark, or whatever the phone uses. `key` is shared with the desktop app. */
 enum class Mode(val label: String, val key: String) {
-    SYSTEM("Jak w systemie", "system"),
-    LIGHT("Jasny", "light"),
-    DARK("Ciemny", "dark"),
+    SYSTEM(N_("Jak w systemie"), "system"),
+    LIGHT(N_("Jasny"), "light"),
+    DARK(N_("Ciemny"), "dark"),
 }
 
 /** Text size on top of the phone's own setting. `key` is shared with the desktop app. */
 enum class TextSize(val label: String, val key: String, val scale: Float) {
-    SMALL("Mały", "small", 0.9f),
-    NORMAL("Zwykły", "normal", 1f),
-    LARGE("Duży", "large", 1.125f),
-    XLARGE("Bardzo duży", "xlarge", 1.25f),
+    SMALL(N_("Mały"), "small", 0.9f),
+    NORMAL(N_("Zwykły"), "normal", 1f),
+    LARGE(N_("Duży"), "large", 1.125f),
+    XLARGE(N_("Bardzo duży"), "xlarge", 1.25f),
 }
 
 /** Builds the Material colours of a theme. Status colours are the same in every theme. */
@@ -142,7 +142,23 @@ fun colorSchemeOf(theme: Theme, dark: Boolean): ColorScheme {
  * Changes redraw every screen at once.
  */
 class Appearance(context: Context) {
+    private val context = context.applicationContext
     private val prefs = context.getSharedPreferences("appearance", Context.MODE_PRIVATE)
+
+    /** "system", or a code from [LANGUAGES]. */
+    var language: String by mutableStateOf(prefs.getString(KEY_LANGUAGE, null) ?: "system")
+        private set
+
+    init {
+        I18n.use(this.context, language)
+    }
+
+    fun chooseLanguage(choice: String) {
+        if (choice != "system" && LANGUAGES.none { it.code == choice }) return
+        language = choice
+        prefs.edit().putString(KEY_LANGUAGE, choice).apply()
+        I18n.use(context, choice)
+    }
 
     var theme: Theme by mutableStateOf(
         THEMES.firstOrNull { it.id == prefs.getString(KEY_THEME, null) } ?: THEMES.first(),
@@ -164,11 +180,47 @@ class Appearance(context: Context) {
         prefs.edit().putString(KEY_SIZE, size.name).apply()
     }
 
+    /** The sound for new messages, an id from [SOUND_CHOICES], or "none". */
+    var sound: String by mutableStateOf(
+        prefs.getString(KEY_SOUND, null)?.takeIf(::isSound) ?: SOUND_CHOICES.first().id,
+    )
+        private set
+
+    /** Notifications show the start of the message, not only who sent it. */
+    var notifyPreview: Boolean by mutableStateOf(prefs.getBoolean(KEY_PREVIEW, true))
+        private set
+
+    /** Sounds inside the app: a message in the open conversation, one sent. */
+    var sounds: Boolean by mutableStateOf(prefs.getBoolean(KEY_SOUNDS, true))
+        private set
+
+    fun chooseSound(id: String) {
+        if (!isSound(id)) return
+        sound = id
+        prefs.edit().putString(KEY_SOUND, id).apply()
+    }
+
+    fun choosePreview(on: Boolean) {
+        notifyPreview = on
+        prefs.edit().putBoolean(KEY_PREVIEW, on).apply()
+    }
+
+    fun chooseSounds(on: Boolean) {
+        sounds = on
+        prefs.edit().putBoolean(KEY_SOUNDS, on).apply()
+    }
+
+    private fun isSound(id: String): Boolean = id == "none" || SOUND_CHOICES.any { it.id == id }
+
     /** The preferences as archives and settings files carry them, the same on every platform. */
     fun toPreferences(): Map<String, String> = mapOf(
         "theme" to theme.id,
         "mode" to mode.key,
         "text_size" to textSize.key,
+        "sounds" to if (sounds) "on" else "off",
+        "sound" to sound,
+        "notify_preview" to if (notifyPreview) "on" else "off",
+        "language" to language,
     )
 
     /** Applies preferences from an archive or a settings file. Returns how many were known. */
@@ -184,6 +236,22 @@ class Appearance(context: Context) {
         }
         TextSize.entries.firstOrNull { it.key == preferences["text_size"] }?.let {
             choose(it)
+            applied++
+        }
+        preferences["sounds"]?.takeIf { it == "on" || it == "off" }?.let {
+            chooseSounds(it == "on")
+            applied++
+        }
+        preferences["sound"]?.takeIf(::isSound)?.let {
+            chooseSound(it)
+            applied++
+        }
+        preferences["notify_preview"]?.takeIf { it == "on" || it == "off" }?.let {
+            choosePreview(it == "on")
+            applied++
+        }
+        preferences["language"]?.takeIf { it == "system" || LANGUAGES.any { known -> known.code == it } }?.let {
+            chooseLanguage(it)
             applied++
         }
         return applied
@@ -209,5 +277,9 @@ class Appearance(context: Context) {
         const val KEY_THEME = "theme"
         const val KEY_MODE = "mode"
         const val KEY_SIZE = "text_size"
+        const val KEY_SOUND = "sound"
+        const val KEY_PREVIEW = "notify_preview"
+        const val KEY_SOUNDS = "sounds"
+        const val KEY_LANGUAGE = "language"
     }
 }
