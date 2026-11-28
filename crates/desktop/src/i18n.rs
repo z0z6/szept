@@ -88,12 +88,17 @@ mod tests {
 
     #[test]
     fn every_language_file_parses_and_is_complete() {
-        let keys = TRANSLATIONS.iter().map(|(code, _)| (*code, tables()[code].len()));
+        let keys = TRANSLATIONS
+            .iter()
+            .map(|(code, _)| (*code, tables()[code].len()));
         let counts: Vec<(&str, usize)> = keys.collect();
         assert_eq!(counts.len(), 10);
         let first = counts[0].1;
         assert!(first > 400, "{counts:?}");
-        assert!(counts.iter().all(|(_, count)| *count == first), "{counts:?}");
+        assert!(
+            counts.iter().all(|(_, count)| *count == first),
+            "{counts:?}"
+        );
         assert_eq!(tables()["en"]["Nowa wiadomość"], "New message");
     }
 

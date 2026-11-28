@@ -351,6 +351,14 @@ fn groups_reach_members_who_are_not_contacts() {
     }
     assert_eq!(ola.groups()[0].name, "Wycieczka");
     assert!(!ola.groups()[0].mine);
+    // The name travels on its own stream, next to the invitation, so on a
+    // slow machine it can arrive second.
+    if ola.display_name(ala.my_id()).is_none() {
+        wait_for(&ola_events, |event| match event {
+            ChatEvent::NameChanged { peer } if peer == ala.my_id() => Some(()),
+            _ => None,
+        });
+    }
     assert_eq!(ola.display_name(ala.my_id()).as_deref(), Some("Ala"));
 
     // Ola writes to the group; Ela gets it straight from her.

@@ -3,7 +3,6 @@ package org.komunikator.app
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -15,11 +14,14 @@ import androidx.compose.ui.unit.dp
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ButtonRow(modifier: Modifier = Modifier, content: @Composable FlowRowScope.() -> Unit) {
+fun ButtonRow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    // FlowRowScope stays inside: in the signature it would make every caller
+    // opt in to the experimental layout API too.
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
-        content = content,
-    )
+    ) {
+        content()
+    }
 }
