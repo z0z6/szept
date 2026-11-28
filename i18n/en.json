@@ -155,6 +155,7 @@
  "Zapisywanie…": "Saving…",
  "Wczytywanie…": "Loading…",
  "Archiwum zapisane.": "Archive saved.",
+ "rozmowy: {conversations}": "conversations: {conversations}",
  "nowe kontakty: {contactsAdded}": "new contacts: {contactsAdded}",
  "nowe grupy: {groupsAdded}": "new groups: {groupsAdded}",
  "przywrócono identyfikator": "identifier restored",

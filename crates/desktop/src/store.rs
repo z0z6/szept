@@ -2,7 +2,7 @@
 //! Persistent, encrypted history comes with milestone 2.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -268,11 +268,14 @@ impl Store {
         for conversation in conversations {
             let key = conversation.key;
             let target = self.conversations.entry(key.clone()).or_default();
+            // A set, not a search through the conversation for each message:
+            // an archive can hold tens of thousands of them.
+            let mut known: HashSet<String> =
+                target.iter().map(|message| message.id.clone()).collect();
             for message in conversation.messages {
-                if target.iter().any(|known| known.id == message.id) {
-                    continue;
+                if known.insert(message.id.clone()) {
+                    target.push(restored(message, me, &key));
                 }
-                target.push(restored(message, me, &key));
             }
             target.sort_by_key(|message| message.at_ms);
         }

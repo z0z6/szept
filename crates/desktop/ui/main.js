@@ -452,7 +452,7 @@ $("archive-form").addEventListener("submit", async (event) => {
         const applied = applyPreferences(report.preferences || {});
         refreshPreferenceControls();
         const parts = [
-          `rozmowy: ${report.conversations}`,
+          t("rozmowy: {conversations}", { conversations: report.conversations }),
           t("nowe kontakty: {contactsAdded}", { contactsAdded: report.contacts_added }),
           t("nowe grupy: {groupsAdded}", { groupsAdded: report.groups_added }),
         ];

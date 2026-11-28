@@ -460,22 +460,32 @@ async fn import_archive_file(
     let Some(path) = picked.and_then(|file| file.into_path().ok()) else {
         return Ok(None);
     };
-    let shared = app.state::<Shared>();
-    let data_dir = shared.data_dir.to_string_lossy().into_owned();
-    // The archive is read while nothing runs on the data directory.
-    let old = shared.core();
-    old.stop();
-    let imported = import_archive(
-        data_dir.clone(),
-        path.to_string_lossy().into_owned(),
-        password,
-        restore_identity,
-    );
-    let core = App::new(data_dir, false).map_err(failed)?;
-    core.start(Arc::new(Listener { app: app.clone() }))
+    // Stopping and starting the core wait on its own runtime, which tokio
+    // refuses inside this command's task (it panics, and the window waits
+    // for an answer forever), so the whole swap runs on a blocking thread.
+    let worker = app.clone();
+    let (core, imported) = tauri::async_runtime::spawn_blocking(move || {
+        let shared = worker.state::<Shared>();
+        let data_dir = shared.data_dir.to_string_lossy().into_owned();
+        // The archive is read while nothing runs on the data directory.
+        shared.core().stop();
+        let imported = import_archive(
+            data_dir.clone(),
+            path.to_string_lossy().into_owned(),
+            password,
+            restore_identity,
+        );
+        let core = App::new(data_dir, false).map_err(failed)?;
+        core.start(Arc::new(Listener {
+            app: worker.clone(),
+        }))
         .map_err(failed)?;
-    *shared.core.write().unwrap() = core.clone();
-    let imported = imported.map_err(failed)?;
+        *shared.core.write().unwrap() = core.clone();
+        Ok::<_, String>((core, imported.map_err(failed)?))
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+    let shared = app.state::<Shared>();
     let report = ImportReport {
         identity_restored: imported.identity_restored,
         wallet_restored: imported.wallet_restored,

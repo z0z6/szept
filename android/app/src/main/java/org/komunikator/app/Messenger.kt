@@ -591,13 +591,15 @@ class Messenger(private val application: Application) : EventListener {
                         val merged = state.messages.toMutableMap()
                         for ((key, messages) in incoming) {
                             val known = merged[key].orEmpty()
-                            val fresh = messages.filter { message -> known.none { it.id == message.id } }
+                            // A set: an archive can hold tens of thousands of messages.
+                            val ids = known.mapTo(HashSet()) { it.id }
+                            val fresh = messages.filter { message -> ids.add(message.id) }
                             merged[key] = (known + fresh).sortedBy { it.atMs }
                         }
                         val parts = buildList {
                             if (result.identityRestored) add(t("przywrócono identyfikator"))
                             if (result.walletRestored) add(t("przywrócono portfel Nano"))
-                            add("rozmowy: ${result.conversations.size}")
+                            add(t("rozmowy: {conversations}", "conversations" to result.conversations.size))
                             add(t("nowe kontakty: {contactsAdded}", "contactsAdded" to result.contactsAdded))
                             add(t("nowe grupy: {groupsAdded}", "groupsAdded" to result.groupsAdded))
                             if (prefsApplied > 0) add(t("przywrócono ustawienia"))
